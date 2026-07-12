@@ -1,0 +1,59 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Bundled Gradle distribution (large, not needed if wrapper is present)
+gradle-8.4/
+gradle-8.4-bin.zip
+
+# Local build logs
+grease
+build_log.txt
+pdf_log.txt
+
+# Local configuration file (sdk path, etc.)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# Keystore files (do not commit signing keys)
+*.jks
+*.keystore
+*.pepk
+
+# External native build folder generated in Android Studio 2.2 and later
+.externalNativeBuild
+.cxx/
+
+# Google Services (e.g. APIs or Firebase)
+google-services.json
+
+# Log/OS files
+*.log
+
+# Captures / screenshots from Android Studio
+captures/
+
+# APK / AAB outputs (kept by assemble tasks but usually not committed)
+*.apk
+*.ap_
+*.aab
+
+# NDK
+obj/
+
+# Temporary files
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
