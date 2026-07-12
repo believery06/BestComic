@@ -74,6 +74,8 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## 许可证
 
+Copyright (C) 2026 believery06
+
 本项目采用 [GNU General Public License v3.0](LICENSE)（GPL-3.0）。
 
 简要说明：
