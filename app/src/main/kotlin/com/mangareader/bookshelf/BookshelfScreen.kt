@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -166,6 +167,11 @@ fun BookshelfScreen(
                 else -> uri.lastPathSegment?.substringAfterLast('/')
             }
         } ?: "书架"
+    }
+
+    // 拦截系统返回手势/按键：从子目录返回到上级书架，根目录时交给系统处理（退出应用）
+    BackHandler(enabled = !isAtRoot) {
+        viewModel.navigateUp()
     }
 
     Scaffold(
