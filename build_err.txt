@@ -1,0 +1,109 @@
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.internal.NativeLibraryLoader in an unnamed module (file:/C:/Users/19051/.gradle/wrapper/dists/gradle-8.4-bin/1w5dpkrfk8irigvoxmyhowfim/gradle-8.4/lib/native-platform-0.22-milestone-25.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker12902578597957282471.tmp
+e: Daemon compilation failed: Could not connect to Kotlin compile daemon
+java.lang.RuntimeException: Could not connect to Kotlin compile daemon
+	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.compileWithDaemon(GradleKotlinCompilerWork.kt:218)
+	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.compileWithDaemonOrFallbackImpl(GradleKotlinCompilerWork.kt:175)
+	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.run(GradleKotlinCompilerWork.kt:135)
+	at org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction.execute(GradleCompilerRunnerWithWorkers.kt:73)
+	at org.gradle.workers.internal.DefaultWorkerServer.execute(DefaultWorkerServer.java:63)
+	at org.gradle.workers.internal.NoIsolationWorkerFactory$1$1.create(NoIsolationWorkerFactory.java:66)
+	at org.gradle.workers.internal.NoIsolationWorkerFactory$1$1.create(NoIsolationWorkerFactory.java:62)
+	at org.gradle.internal.classloader.ClassLoaderUtils.executeInClassloader(ClassLoaderUtils.java:100)
+	at org.gradle.workers.internal.NoIsolationWorkerFactory$1.lambda$execute$0(NoIsolationWorkerFactory.java:62)
+	at org.gradle.workers.internal.AbstractWorker$1.call(AbstractWorker.java:44)
+	at org.gradle.workers.internal.AbstractWorker$1.call(AbstractWorker.java:41)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:204)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:199)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:66)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:59)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:157)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:59)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:53)
+	at org.gradle.internal.operations.DefaultBuildOperationExecutor.call(DefaultBuildOperationExecutor.java:78)
+	at org.gradle.workers.internal.AbstractWorker.executeWrappedInBuildOperation(AbstractWorker.java:41)
+	at org.gradle.workers.internal.NoIsolationWorkerFactory$1.execute(NoIsolationWorkerFactory.java:59)
+	at org.gradle.workers.internal.DefaultWorkerExecutor.lambda$submitWork$0(DefaultWorkerExecutor.java:170)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at org.gradle.internal.work.DefaultConditionalExecutionQueue$ExecutionRunner.runExecution(DefaultConditionalExecutionQueue.java:187)
+	at org.gradle.internal.work.DefaultConditionalExecutionQueue$ExecutionRunner.access$700(DefaultConditionalExecutionQueue.java:120)
+	at org.gradle.internal.work.DefaultConditionalExecutionQueue$ExecutionRunner$1.run(DefaultConditionalExecutionQueue.java:162)
+	at org.gradle.internal.Factories$1.create(Factories.java:31)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.withLocks(DefaultWorkerLeaseService.java:264)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.runAsWorkerThread(DefaultWorkerLeaseService.java:128)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.runAsWorkerThread(DefaultWorkerLeaseService.java:133)
+	at org.gradle.internal.work.DefaultConditionalExecutionQueue$ExecutionRunner.runBatch(DefaultConditionalExecutionQueue.java:157)
+	at org.gradle.internal.work.DefaultConditionalExecutionQueue$ExecutionRunner.run(DefaultConditionalExecutionQueue.java:126)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:545)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at org.gradle.internal.concurrent.ExecutorPolicy$CatchAndRecordFailures.onExecute(ExecutorPolicy.java:64)
+	at org.gradle.internal.concurrent.AbstractManagedExecutor$1.run(AbstractManagedExecutor.java:47)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1095)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:619)
+	at java.base/java.lang.Thread.run(Thread.java:1447)
+
+exception: WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+exception: WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.jetbrains.kotlin.com.intellij.util.containers.ConcurrentLongObjectHashMap (file:/C:/Users/19051/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/1.9.22/9cd4dc7773cf2a99ecd961a88fbbc9a2da3fb5e1/kotlin-compiler-embeddable-1.9.22.jar)
+exception: WARNING: Please consider reporting this to the maintainers of class org.jetbrains.kotlin.com.intellij.util.containers.ConcurrentLongObjectHashMap
+exception: WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfExtras.kt:252:5: warning: parameter 'progressMap' is never used
+exception:     progressMap: Map<String, Pair<Int, Int>>,
+exception:     ^
+exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfExtras.kt:253:5: warning: parameter 'bookmarks' is never used
+exception:     bookmarks: Map<String, List<Int>>,
+exception:     ^
+exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfExtras.kt:254:5: warning: parameter 'favorites' is never used
+exception:     favorites: Set<String>,
+exception:     ^
+exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfScreen.kt:796:13: warning: name shadowed: context
+exception:         val context = LocalContext.current
+exception:             ^
+exception: app\src\main\kotlin\com\mangareader\browser\BrowserScreen.kt:35:5: warning: parameter 'onBack' is never used
+exception:     onBack: () -> Unit = {},
+exception:     ^
+exception: app\src\main\kotlin\com\mangareader\browser\BrowserScreen.kt:195:94: warning: 'InsertDriveFile: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.InsertDriveFile
+exception:                 imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+exception:                                                                                              ^
+exception: app\src\main\kotlin\com\mangareader\cache\PageCacheManager.kt:363:47: warning: 'newInstance(ByteArray, Int, Int, Boolean): BitmapRegionDecoder' is deprecated. Deprecated in Java
+exception:             val decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false) ?: return null
+exception:                                               ^
+exception: app\src\main\kotlin\com\mangareader\cache\PageCacheManager.kt:363:88: warning: elvis operator (?:) always returns the left operand of non-nullable type BitmapRegionDecoder
+exception:             val decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false) ?: return null
+exception:                                                                                        ^
+exception: app\src\main\kotlin\com\mangareader\parser\Cb7Parser.kt:115:85: warning: 'constructor SevenZFile(File!)' is deprecated. Deprecated in Java
+exception:             uri.path?.let(::File)?.takeIf(File::exists)?.let { return ArchiveHandle(SevenZFile(it)) }
+exception:                                                                                     ^
+exception: app\src\main\kotlin\com\mangareader\parser\Cb7Parser.kt:121:27: warning: 'constructor SevenZFile(SeekableByteChannel!)' is deprecated. Deprecated in Java
+exception:             ArchiveHandle(SevenZFile(input.channel), input, pfd)
+exception:                           ^
+exception: app\src\main\kotlin\com\mangareader\parser\CbzParser.kt:105:31: warning: 'constructor ZipFile(File!)' is deprecated. Deprecated in Java
+exception:                     zipFile = ZipFile(path)
+exception:                               ^
+exception: app\src\main\kotlin\com\mangareader\parser\CbzParser.kt:114:33: warning: 'constructor ZipFile(SeekableByteChannel!)' is deprecated. Deprecated in Java
+exception:                 val openedZip = ZipFile(openedFis.channel)
+exception:                                 ^
+exception: app\src\main\kotlin\com\mangareader\parser\EpubParser.kt:159:9: warning: parameter 'imageKeys' is never used
+exception:         imageKeys: Set<String>
+exception:         ^
+exception: app\src\main\kotlin\com\mangareader\utils\CoverExtractor.kt:133:35: warning: there is more than one label with such a name in this scope
+exception:                             return@use BitmapFactory.decodeByteArray(data, 0, data.size)
+exception:                                   ^
+exception: app\src\main\kotlin\com\mangareader\utils\CoverExtractor.kt:176:58: warning: 'constructor SevenZFile(SeekableByteChannel!)' is deprecated. Deprecated in Java
+exception:             org.apache.commons.compress.archivers.sevenz.SevenZFile(input.channel).use { sz ->
+exception:                                                          ^
+exception: app\src\main\kotlin\com\mangareader\utils\CoverExtractor.kt:207:35: warning: there is more than one label with such a name in this scope
+exception:                             return@use BitmapFactory.decodeStream(tar)
+exception:                                   ^
+exception: app\src\main\kotlin\com\mangareader\utils\ImageUtils.kt:95:65: warning: parameter 'filter' is never used
+exception:     fun scaleBitmap(src: Bitmap, newWidth: Int, newHeight: Int, filter: com.mangareader.data.ScaleFilter): Bitmap {
+exception:                                                                 ^
+exception: app\src\main\kotlin\com\mangareader\utils\ImageUtils.kt:144:9: warning: parameter 'sharpenStrength' is never used
+exception:         sharpenStrength: Float = 1f,
+exception:         ^
+exception: app\src\main\kotlin\com\mangareader\utils\ImageUtils.kt:145:9: warning: parameter 'denoiseStrength' is never used
+exception:         denoiseStrength: Float = 1f,
+exception:         ^

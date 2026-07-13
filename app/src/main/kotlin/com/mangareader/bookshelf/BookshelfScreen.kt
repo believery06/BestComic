@@ -103,6 +103,8 @@ fun BookshelfScreen(
     var showStats by remember { mutableStateOf(false) }
     var showLists by remember { mutableStateOf(false) }
     var showWebDav by remember { mutableStateOf(false) }
+    var showGitHubStar by remember { mutableStateOf(false) }
+    var showDonation by remember { mutableStateOf(false) }
     var showSmbNas by remember { mutableStateOf(false) }
     var showTheme by remember { mutableStateOf(false) }
     var comicForExtras by remember { mutableStateOf<ComicEntry?>(null) }
@@ -739,6 +741,22 @@ fun BookshelfScreen(
                 onOpenSettings()
             }
         )
+        DropdownMenuItem(
+            text = { Text("GitHub Star") },
+            leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) },
+            onClick = {
+                showMoreMenu = false
+                showGitHubStar = true
+            }
+        )
+        DropdownMenuItem(
+            text = { Text("打赏支持") },
+            leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) },
+            onClick = {
+                showMoreMenu = false
+                showDonation = true
+            }
+        )
     }
 
     if (showContact) {
@@ -772,6 +790,26 @@ fun BookshelfScreen(
             favorites = favorites,
             onDismiss = { showWebDav = false }
         )
+    }
+
+    if (showGitHubStar) {
+        val context = LocalContext.current
+        GitHubStarDialog(
+            onDismiss = { showGitHubStar = false },
+            onOpenGitHub = {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(com.mangareader.Constants.GITHUB_REPO_URL))
+                    context.startActivity(intent)
+                    showGitHubStar = false
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(context, "无法打开浏览器", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    if (showDonation) {
+        DonationDialog(onDismiss = { showDonation = false })
     }
 
     if (showSmbNas) {

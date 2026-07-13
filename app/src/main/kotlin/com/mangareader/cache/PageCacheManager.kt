@@ -3,10 +3,12 @@ package com.mangareader.cache
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.util.Size
 import com.mangareader.provider.ComicProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -17,33 +19,19 @@ import kotlinx.coroutines.withContext
 import java.io.FileOutputStream
 import java.util.Collections
 
-/**
- * 页面缓存管理器。
- *
- * 新策略：
- * - L1 内存缓存：以当前页为中心，前后各 [PREFETCH_RANGE] 页（默认 15，总约 31 页）。
- *   用户翻到任意一页时，该页附近的页面大概率已在内存，翻页更流畅。
- * - L2 磁盘缓存：仅缓存原始图片字节，默认上限 30MB（页面）+ 10MB（缩略图），LRU 淘汰。
- * - 解码策略：按屏幕尺寸 1.5 倍采样，普通图片用 RGB_565；PDF 等系统要求用 ARGB_8888。
- * - 翻页时先同步加载当前页，再在后台按距离优先级预加载前后页。
- * - 切换漫画或退出阅读时清空 L1 内存缓存，避免不同漫画/会话之间互相占用。
- */
 class PageCacheManager(context: Context) {
 
-    /** 预加载方向：滚动模式下按滚动方向优先加载，避免视觉上的“不按顺序加载”。 */
     enum class PrefetchDirection { BOTH, FORWARD, BACKWARD }
+
+    enum class Aggressiveness { LOW, BALANCED, HIGH }
 
     companion object {
         private const val TAG = "PageCacheManager"
-        // 当前页前后各预加载 15 页，总缓存窗口约 31 页
-        private const val PREFETCH_RANGE = 15
-        // 后台预加载并发度：适当提高并发以提升快速滚动时的加载速度
         private const val PREFETCH_CONCURRENCY = 3
-        // 内存缓存总字节上限：约 120MB（约 15 张 1080x1920 ARGB_8888 位图）
         private const val MEMORY_LIMIT_BYTES = 120L * 1024 * 1024
+        private const val MAX_IMAGE_DIMENSION = 8000
     }
 
-    // 以页索引为 key 的内存缓存；accessOrder=true 实现 LRU 读写线程安全
     private val memoryCache = Collections.synchronizedMap(LinkedHashMap<Int, Bitmap>(16, 0.75f, true))
     private val memoryUsed = java.util.concurrent.atomic.AtomicLong(0L)
 
@@ -59,18 +47,37 @@ class PageCacheManager(context: Context) {
     private val pageDiskCache = DiskLruCache(context.cacheDir, "page_cache", 30L * 1024 * 1024)
     private val thumbDiskCache = DiskLruCache(context.cacheDir, "thumb_cache", 10L * 1024 * 1024)
 
+    private val diskKeyIndex = Collections.synchronizedSet(java.util.HashSet<String>())
+
     private var screenSize: Size = Size(1080, 1920)
+
+    private var prefetchRangeSize = 15
+    private var scrollSpeedTracker = ScrollSpeedTracker()
 
     fun setScreenSize(width: Int, height: Int) {
         screenSize = Size(width, height)
     }
 
-    /**
-     * 翻到 [index] 时调用。
-     * - 若换了漫画，清空 L1 内存与 L2 磁盘缓存
-     * - 同步确保当前页在内存
-     * - 后台按 [direction] 优先级预加载前后 [PREFETCH_RANGE] 页
-     */
+    fun setAggressiveness(level: Aggressiveness) {
+        prefetchRangeSize = when (level) {
+            Aggressiveness.LOW -> 5
+            Aggressiveness.BALANCED -> 15
+            Aggressiveness.HIGH -> 25
+        }
+    }
+
+    fun getCurrentPrefetchRange(): Int = prefetchRangeSize
+
+    private fun updateScrollSpeed(index: Int) {
+        scrollSpeedTracker.onPageChanged(index)
+        val speed = scrollSpeedTracker.getCurrentSpeed()
+        prefetchRangeSize = when {
+            speed > 5 -> 25
+            speed > 2 -> 15
+            else -> 8
+        }
+    }
+
     suspend fun setCurrentPage(
         provider: ComicProvider,
         index: Int,
@@ -79,49 +86,42 @@ class PageCacheManager(context: Context) {
         if (index !in 0 until provider.pageCount) return
 
         withContext(Dispatchers.IO) {
-            // 切换漫画：清空所有缓存，避免上一本的位图/磁盘数据占用空间
             if (currentCacheId != provider.cacheId) {
                 clearMemoryInternal()
-                pageDiskCache.clear()
-                thumbDiskCache.clear()
+                clearDiskInternal()
                 currentCacheId = provider.cacheId
             }
 
             currentIndexValue = index
+            updateScrollSpeed(index)
 
-            // 1. 同步加载当前页（阻塞，保证 UI 立刻能显示）
             loadIntoMemory(provider, index)
 
-            // 2. 取消旧预加载任务
             prefetchJob?.cancelAndJoin()
 
-            // 3. 启动新预加载任务
-            prefetchJob = launch {
-                prefetchRange(provider, index, direction)
+            prefetchJob = launch(SupervisorJob()) {
+                try {
+                    prefetchRange(provider, index, direction)
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Prefetch failed", e)
+                }
             }
         }
     }
 
-    /**
-     * 获取指定页位图。优先内存缓存，其次磁盘，最后从 provider 读取。
-     * 此方法不主动写入内存缓存，仅作为数据读取入口。
-     */
     suspend fun getPage(provider: ComicProvider, index: Int): Bitmap? = withContext(Dispatchers.IO) {
         if (index !in 0 until provider.pageCount) return@withContext null
 
-        // 1. 内存命中
         synchronized(memoryCache) {
             memoryCache[index]?.takeIf { !it.isRecycled }
         }?.let { return@withContext it }
 
-        // 2. 磁盘缓存（原始字节）
         val bytesFromDisk = loadBytesFromDisk(provider, index)
         if (bytesFromDisk != null) {
             val decoded = decodeBytes(bytesFromDisk)
             if (decoded != null) return@withContext decoded
         }
 
-        // 3. 从 provider 读取原始字节并缓存到磁盘
         val bytes = readPageBytes(provider, index)
         if (bytes != null) {
             saveBytesToDisk(provider, index, bytes)
@@ -129,19 +129,14 @@ class PageCacheManager(context: Context) {
             if (decoded != null) return@withContext decoded
         }
 
-        // 4. fallback：provider 无法提供字节流（如 PDF），直接获取 Bitmap
         runCatching { provider.getPage(index) }.getOrNull()?.takeIf { !it.isRecycled }
     }
 
-    /**
-     * 获取缩略图（独立缓存体系，最大边不超过 [maxDimension]）。
-     */
     suspend fun getThumbnail(provider: ComicProvider, index: Int, maxDimension: Int): Bitmap? =
         withContext(Dispatchers.IO) {
             if (index !in 0 until provider.pageCount) return@withContext null
             val dim = maxDimension.coerceIn(64, 360)
 
-            // 1. 优先从内存缓存获取已有位图并缩放
             val cachedBmp = synchronized(memoryCache) {
                 memoryCache[index]?.takeIf { !it.isRecycled }
             }
@@ -149,13 +144,11 @@ class PageCacheManager(context: Context) {
                 return@withContext scaleBitmapForThumb(cachedBmp, dim)
             }
 
-            // 2. 磁盘缩略图缓存
             val key = thumbKey(provider.cacheId, index, dim)
             thumbDiskCache.getStream(key)?.use { stream ->
                 BitmapFactory.decodeStream(stream)?.takeIf { !it.isRecycled }
             }?.let { return@withContext it }
 
-            // 3. 从原始字节解码缩略图
             val bytes = readPageBytes(provider, index)
             if (bytes != null && bytes.isNotEmpty()) {
                 val decoded = decodeBytes(bytes, dim, dim)
@@ -170,7 +163,6 @@ class PageCacheManager(context: Context) {
                 }
             }
 
-            // 4. fallback：用 provider 直接获取位图再缩放
             val fullBmp = runCatching { provider.getPage(index) }.getOrNull()
                 ?.takeIf { !it.isRecycled } ?: return@withContext null
             val thumb = scaleBitmapForThumb(fullBmp, dim)
@@ -178,7 +170,6 @@ class PageCacheManager(context: Context) {
             thumb
         }
 
-    /** 主动预加载一页到内存缓存。 */
     suspend fun preload(provider: ComicProvider, index: Int) {
         if (index !in 0 until provider.pageCount) return
         withContext(Dispatchers.IO) {
@@ -186,25 +177,19 @@ class PageCacheManager(context: Context) {
         }
     }
 
-    /** 清空 L1 内存缓存（退出阅读/切换漫画时调用），保留 L2 磁盘缓存。 */
     fun clearMemory() {
         clearMemoryInternal()
     }
 
-    /** 清空 L1 内存 + L2 磁盘缓存。 */
     fun clear() {
         clearMemoryInternal()
-        pageDiskCache.clear()
-        thumbDiskCache.clear()
+        clearDiskInternal()
     }
 
-    /** 仅清空磁盘缓存。 */
     fun clearDisk() {
-        pageDiskCache.clear()
-        thumbDiskCache.clear()
+        clearDiskInternal()
     }
 
-    /** 低内存时只保留当前页，移除其他缓存条目但不回收位图，避免 UI 线程正在使用时回收导致闪退。 */
     fun onLowMemory() {
         val keep = currentIndexValue
         synchronized(memoryCache) {
@@ -216,22 +201,17 @@ class PageCacheManager(context: Context) {
             }
         }
         memoryUsed.set(0L)
-        // 不再主动 recycle，让 GC 在位图不再被引用时自然回收，避免 UI 线程闪退
     }
 
-    /** 后台预加载当前页前后 [PREFETCH_RANGE] 页，按 [direction] 决定优先级。 */
     private suspend fun prefetchRange(
         provider: ComicProvider,
         center: Int,
         direction: PrefetchDirection
     ) {
-        val start = (center - PREFETCH_RANGE).coerceAtLeast(0)
-        val end = (center + PREFETCH_RANGE).coerceAtMost(provider.pageCount - 1)
+        val range = prefetchRangeSize
+        val start = (center - range).coerceAtLeast(0)
+        val end = (center + range).coerceAtMost(provider.pageCount - 1)
 
-        // 构建按方向优先的加载序列：
-        // - FORWARD：先顺序加载后面页面，再加载前面页面
-        // - BACKWARD：先顺序加载前面页面，再加载后面页面
-        // - BOTH：按距离当前页由近及远排序
         val indices = when (direction) {
             PrefetchDirection.FORWARD -> {
                 val forward = (center + 1..end).toList()
@@ -252,45 +232,41 @@ class PageCacheManager(context: Context) {
 
         for (idx in indices) {
             if (!currentCoroutineContext().isActive) return
-            // 已在内存则跳过
             val cached = synchronized(memoryCache) {
                 memoryCache[idx]?.takeIf { !it.isRecycled }
             }
             if (cached != null) continue
 
             prefetchSemaphore.withPermit {
+                if (!currentCoroutineContext().isActive) return@withPermit
                 loadIntoMemory(provider, idx)
             }
         }
     }
 
-    /** 加载一页并放入内存缓存，超出内存上限时淘汰最久未使用的位图。 */
     private suspend fun loadIntoMemory(provider: ComicProvider, index: Int) {
+        if (!currentCoroutineContext().isActive) return
         if (index !in 0 until provider.pageCount) return
 
-        // 再次检查，避免重复加载
         synchronized(memoryCache) {
             memoryCache[index]?.takeIf { !it.isRecycled }
         }?.let { return }
 
         val bmp = getPage(provider, index) ?: return
+        if (bmp.isRecycled) return
+
         val bytes = bmp.allocationByteCount.toLong()
         val old = synchronized(memoryCache) {
             val previous = memoryCache.put(index, bmp)
             if (previous == null) memoryUsed.addAndGet(bytes) else memoryUsed.addAndGet(bytes - previous.allocationByteCount.toLong())
             previous
         }
-        // 如果 map 中已有同索引位图（理论上不应发生），回收旧的
         if (old != null && old !== bmp && !old.isRecycled) {
             runCatching { old.recycle() }
         }
-        // 超出内存上限时淘汰最久未使用的页面（保留当前页）
         evictOldestIfNeeded()
     }
 
-    /** 超出 [MEMORY_LIMIT_BYTES] 时移除最久未使用的位图，保留 [currentIndexValue]。
-     *  注意：仅从缓存移除，不调用 recycle()，避免 UI 线程正在使用时回收导致闪退。
-     *  内存上限是硬约束，移除后 GC 会在位图不再被引用时自然回收。 */
     private fun evictOldestIfNeeded() {
         while (memoryUsed.get() > MEMORY_LIMIT_BYTES) {
             val removed = synchronized(memoryCache) {
@@ -303,7 +279,6 @@ class PageCacheManager(context: Context) {
                 }
                 return@synchronized null
             } ?: break
-            // 不 recycle，避免 UI 线程正在使用该位图时闪退
             memoryUsed.addAndGet(-removed.allocationByteCount.toLong())
         }
     }
@@ -319,6 +294,26 @@ class PageCacheManager(context: Context) {
         }
         memoryUsed.set(0L)
         currentIndexValue = -1
+    }
+
+    private fun clearDiskInternal() {
+        pageDiskCache.clear()
+        thumbDiskCache.clear()
+        synchronized(diskKeyIndex) {
+            diskKeyIndex.clear()
+        }
+    }
+
+    private fun isKeyInDiskCache(key: String): Boolean {
+        synchronized(diskKeyIndex) {
+            return diskKeyIndex.contains(key)
+        }
+    }
+
+    private fun addToDiskKeyIndex(key: String) {
+        synchronized(diskKeyIndex) {
+            diskKeyIndex.add(key)
+        }
     }
 
     private suspend fun readPageBytes(provider: ComicProvider, index: Int): ByteArray? {
@@ -339,6 +334,11 @@ class PageCacheManager(context: Context) {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
             if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
 
+            if (boundsOptions.outWidth > MAX_IMAGE_DIMENSION || boundsOptions.outHeight > MAX_IMAGE_DIMENSION) {
+                android.util.Log.w(TAG, "Image too large: ${boundsOptions.outWidth}x${boundsOptions.outHeight}, using region decoder")
+                return decodeWithRegionDecoder(bytes, targetW, targetH)
+            }
+
             val sample = calculateInSampleSize(
                 boundsOptions.outWidth, boundsOptions.outHeight, targetW, targetH
             )
@@ -358,6 +358,29 @@ class PageCacheManager(context: Context) {
         }
     }
 
+    private fun decodeWithRegionDecoder(bytes: ByteArray, reqWidth: Int, reqHeight: Int): Bitmap? {
+        return try {
+            val decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false) ?: return null
+            val width = decoder.width
+            val height = decoder.height
+            val scale = (reqWidth.toFloat() / width).coerceAtLeast(reqHeight.toFloat() / height).coerceAtMost(1f)
+            val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+            val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(width, height, targetWidth, targetHeight)
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+
+            val bitmap = decoder.decodeRegion(android.graphics.Rect(0, 0, width, height), options)
+            decoder.recycle()
+            bitmap
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Region decode failed: ${e.message}")
+            null
+        }
+    }
+
     private fun calculateInSampleSize(width: Int, height: Int, reqWidth: Int, reqHeight: Int): Int {
         if (width <= 0 || height <= 0 || reqWidth <= 0 || reqHeight <= 0) return 1
         var inSampleSize = 1
@@ -373,6 +396,7 @@ class PageCacheManager(context: Context) {
 
     private fun loadBytesFromDisk(provider: ComicProvider, index: Int): ByteArray? {
         val key = pageKey(provider.cacheId, index)
+        if (!isKeyInDiskCache(key)) return null
         return try {
             pageDiskCache.getStream(key)?.use { it.readBytes() }
         } catch (e: Exception) {
@@ -383,6 +407,7 @@ class PageCacheManager(context: Context) {
     private fun saveBytesToDisk(provider: ComicProvider, index: Int, bytes: ByteArray) {
         if (bytes.isEmpty()) return
         val key = pageKey(provider.cacheId, index)
+        addToDiskKeyIndex(key)
         pageDiskCache.put(key) { file ->
             FileOutputStream(file).use { out ->
                 out.write(bytes)
@@ -409,5 +434,24 @@ class PageCacheManager(context: Context) {
         } catch (e: OutOfMemoryError) {
             src
         }
+    }
+
+    private class ScrollSpeedTracker {
+        private var lastPage = -1
+        private var lastTime = 0L
+        private var pagesPerSecond = 0f
+
+        fun onPageChanged(page: Int) {
+            val now = System.currentTimeMillis()
+            if (lastPage >= 0 && lastTime > 0) {
+                val elapsed = (now - lastTime).coerceAtLeast(1L)
+                val speed = 1000f / elapsed
+                pagesPerSecond = pagesPerSecond * 0.7f + speed * 0.3f
+            }
+            lastPage = page
+            lastTime = now
+        }
+
+        fun getCurrentSpeed(): Float = pagesPerSecond
     }
 }
