@@ -29,12 +29,15 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
@@ -176,29 +179,33 @@ fun BookshelfScreen(
         viewModel.navigateUp()
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(if (isAtRoot) "书架" else currentName)
+    // 根据 RTL 设置应用全局布局方向（仅书架界面）
+    val layoutDirection = if (readerSettings.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
+
+    CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(if (isAtRoot) "书架" else currentName)
+                            if (!isAtRoot) {
+                                Text(
+                                    text = uiState.pathStack.size.toString() + " 级",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
                         if (!isAtRoot) {
-                            Text(
-                                text = uiState.pathStack.size.toString() + " 级",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            IconButton(onClick = { viewModel.navigateUp() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回上级")
+                            }
                         }
-                    }
-                },
-                navigationIcon = {
-                    if (!isAtRoot) {
-                        IconButton(onClick = { viewModel.navigateUp() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回上级")
-                        }
-                    }
-                },
+                    },
                 actions = {
                     TextButton(onClick = onOpenBrowser) {
                         Text("浏览器", color = MaterialTheme.colorScheme.primary)
@@ -853,6 +860,7 @@ fun BookshelfScreen(
             onDismiss = { comicForExtras = null }
         )
     }
+    } // end CompositionLocalProvider
 }
 
 private enum class BookshelfFilter { ALL, FAVORITES, UNREAD, READING, READ }

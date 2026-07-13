@@ -431,23 +431,33 @@ private fun PageViewer(
             }
         }
         // 水平滑动翻页：仅在未放大且非 CURL 动画时启用
+        // 增加轻拂（fling）检测：即使滑动距离短，只要速度够快也能翻页
         .pointerInput(scale, rtl, isCurling, pageAnimation) {
             if (scale <= 1.05f && !isCurling && pageAnimation != com.mangareader.data.PageAnimation.CURL) {
                 var totalDrag = 0f
+                var lastDragTime = 0L
+                var lastDragAmount = 0f
                 detectHorizontalDragGestures(
-                    onDragStart = { totalDrag = 0f },
+                    onDragStart = {
+                        totalDrag = 0f
+                        lastDragTime = 0L
+                        lastDragAmount = 0f
+                    },
                     onHorizontalDrag = { change, dragAmount ->
                         change.consume()
                         totalDrag += dragAmount
+                        lastDragAmount = dragAmount
+                        lastDragTime = System.currentTimeMillis()
                     },
                     onDragEnd = {
+                        val elapsed = System.currentTimeMillis() - lastDragTime
+                        val velocity = if (elapsed > 0 && elapsed < 200) kotlin.math.abs(lastDragAmount * 1000f / elapsed) else 0f
+                        val flingThreshold = 1500f
                         when {
-                            // 向左滑动
-                            totalDrag < -100f -> {
+                            totalDrag < -100f || velocity > flingThreshold -> {
                                 if (rtl) realOnTapNext() else realOnTapPrev()
                             }
-                            // 向右滑动
-                            totalDrag > 100f -> {
+                            totalDrag > 100f || velocity < -flingThreshold -> {
                                 if (rtl) realOnTapPrev() else realOnTapNext()
                             }
                         }

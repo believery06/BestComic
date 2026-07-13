@@ -83,8 +83,8 @@ Try ./gradlew --stop if this issue persists.
 > Task :app:mergeDebugJavaResource UP-TO-DATE
 > Task :app:mergeProjectDexDebug
 > Task :app:packageDebug
-> Task :app:createDebugApkListingFileRedirect
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
 > Task :app:assembleDebug
 
-BUILD SUCCESSFUL in 1m 23s
-33 actionable tasks: 6 executed, 27 up-to-date
+BUILD SUCCESSFUL in 1m 26s
+33 actionable tasks: 5 executed, 28 up-to-date

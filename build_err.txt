@@ -3,7 +3,7 @@ WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.i
 WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
 WARNING: Restricted methods will be blocked in a future release unless native access is enabled
 
-e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker5803217188702922402.tmp
+e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker4191859186050740382.tmp
 e: Daemon compilation failed: Could not connect to Kotlin compile daemon
 java.lang.RuntimeException: Could not connect to Kotlin compile daemon
 	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.compileWithDaemon(GradleKotlinCompilerWork.kt:218)
@@ -59,7 +59,7 @@ exception:     ^
 exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfExtras.kt:254:5: warning: parameter 'favorites' is never used
 exception:     favorites: Set<String>,
 exception:     ^
-exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfScreen.kt:796:13: warning: name shadowed: context
+exception: app\src\main\kotlin\com\mangareader\bookshelf\BookshelfScreen.kt:803:13: warning: name shadowed: context
 exception:         val context = LocalContext.current
 exception:             ^
 exception: app\src\main\kotlin\com\mangareader\browser\BrowserScreen.kt:35:5: warning: parameter 'onBack' is never used
