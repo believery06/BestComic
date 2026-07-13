@@ -25,6 +25,8 @@ import com.mangareader.onboarding.OnboardingHost
 import com.mangareader.reader.ReaderScreen
 import com.mangareader.settings.SettingsScreen
 import com.mangareader.ui.theme.MangaReaderTheme
+import com.mangareader.utils.CrashHandler
+import com.mangareader.utils.CrashLogDialog
 
 /**
  * Navigation routes. The Reader route takes no arguments — the ComicEntry
@@ -48,6 +50,15 @@ fun MangaReaderApp(startUri: Uri? = null) {
         .collectAsStateWithLifecycle(initialValue = com.mangareader.data.ReaderSettings())
     var showHelpManually by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // 启动时检测上次是否有异常退出，若有则记录待展示
+    var pendingCrashLogs by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        val logs = CrashHandler.consumeCrashLogs()
+        if (logs.isNotEmpty()) {
+            pendingCrashLogs = logs
+        }
+    }
 
     LaunchedEffect(startUri) {
         startUri?.let { uri ->
@@ -151,6 +162,13 @@ fun MangaReaderApp(startUri: Uri? = null) {
                 }
                 showHelpManually = false
             }
+        )
+    }
+
+    if (pendingCrashLogs.isNotEmpty()) {
+        CrashLogDialog(
+            logs = pendingCrashLogs,
+            onDismiss = { pendingCrashLogs = emptyList() }
         )
     }
 }

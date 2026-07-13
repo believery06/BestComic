@@ -1786,42 +1786,47 @@ private fun PanelViewer(
                 modifier = Modifier.align(Alignment.Center),
                 color = Color.White
             )
-        } else if (pageBitmap != null && currentPanel != null) {
-            // 裁剪显示当前分镜区域
-            val bmp = pageBitmap!!
-            val bounds = currentPanel.bounds
-            val cropLeft = bounds.left.coerceIn(0, bmp.width)
-            val cropTop = bounds.top.coerceIn(0, bmp.height)
-            val cropWidth = (bounds.width()).coerceIn(1, bmp.width - cropLeft)
-            val cropHeight = (bounds.height()).coerceIn(1, bmp.height - cropTop)
+        } else if (currentPanel != null) {
+            val bmp = pageBitmap
+            if (bmp != null && !bmp.isRecycled) {
+                val bounds = currentPanel.bounds
+                val cropLeft = bounds.left.coerceIn(0, bmp.width)
+                val cropTop = bounds.top.coerceIn(0, bmp.height)
+                val cropWidth = (bounds.width()).coerceIn(1, bmp.width - cropLeft)
+                val cropHeight = (bounds.height()).coerceIn(1, bmp.height - cropTop)
 
-            var cropped by remember { mutableStateOf<Bitmap?>(null) }
-            LaunchedEffect(panelState.pageIndex, panelState.currentPanelIndex, pageBitmap) {
-                val b = pageBitmap ?: return@LaunchedEffect
-                if (b.isRecycled || cropWidth <= 0 || cropHeight <= 0) return@LaunchedEffect
-                val newCropped = runCatching {
-                    Bitmap.createBitmap(b, cropLeft, cropTop, cropWidth, cropHeight)
-                }.getOrNull()
-                cropped?.let { old -> if (!old.isRecycled && old !== b) runCatching { old.recycle() } }
-                cropped = newCropped
-            }
-            DisposableEffect(Unit) {
-                onDispose {
-                    cropped?.let { old -> if (!old.isRecycled && old !== pageBitmap) runCatching { old.recycle() } }
-                    pageBitmap?.let { old -> if (!old.isRecycled) runCatching { old.recycle() } }
-                    pageBitmap = null
+                var cropped by remember { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(panelState.pageIndex, panelState.currentPanelIndex, pageBitmap) {
+                    val b = pageBitmap ?: return@LaunchedEffect
+                    if (b.isRecycled || cropWidth <= 0 || cropHeight <= 0) return@LaunchedEffect
+                    val newCropped = runCatching {
+                        Bitmap.createBitmap(b, cropLeft, cropTop, cropWidth, cropHeight)
+                    }.getOrNull()
+                    cropped?.let { old -> if (!old.isRecycled && old !== b) runCatching { old.recycle() } }
+                    cropped = newCropped
                 }
-            }
+                DisposableEffect(Unit) {
+                    onDispose {
+                        cropped?.let { old -> if (!old.isRecycled && old !== pageBitmap) runCatching { old.recycle() } }
+                        pageBitmap?.let { old -> if (!old.isRecycled) runCatching { old.recycle() } }
+                        pageBitmap = null
+                    }
+                }
 
-            if (cropped != null && !cropped!!.isRecycled) {
-                Image(
-                    bitmap = cropped!!.asImageBitmap(),
-                    contentDescription = "分镜 ${panelState.currentPanelIndex + 1}",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                )
+                val safeCropped = cropped
+                if (safeCropped != null && !safeCropped.isRecycled) {
+                    val imageBitmap = runCatching { safeCropped.asImageBitmap() }.getOrNull()
+                    if (imageBitmap != null && !safeCropped.isRecycled) {
+                        Image(
+                            bitmap = imageBitmap,
+                            contentDescription = "分镜 ${panelState.currentPanelIndex + 1}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                        )
+                    }
+                }
             }
 
             // 分镜进度指示器

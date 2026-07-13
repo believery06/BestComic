@@ -389,6 +389,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         provider?.close()
         provider = null
         cacheManager.clearMemory()
+        cacheManager.clearDisk()
         synchronized(processedBitmapCache) {
             processedBitmapCache.values.forEach { bmp ->
                 if (!bmp.isRecycled) runCatching { bmp.recycle() }
