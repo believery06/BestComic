@@ -380,6 +380,15 @@ private fun PageViewer(
     var magnifierBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var magnifierCrop by remember { mutableStateOf<Bitmap?>(null) }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            // 清理放大镜位图，防止配置变更或退出阅读时内存泄漏
+            magnifierCrop?.let { crop -> if (!crop.isRecycled) runCatching { crop.recycle() } }
+            magnifierCrop = null
+            magnifierBitmap = null
+        }
+    }
+
     var curlTrigger by remember { mutableStateOf(false) }
     var curlForward by remember { mutableStateOf(true) }
     var isCurling by remember { mutableStateOf(false) }
@@ -1571,6 +1580,16 @@ private fun PageScrubberWithThumbnail(
     var previewPage by remember(currentPage) { mutableIntStateOf(currentPage) }
     var isDragging by remember { mutableStateOf(false) }
     var previewBitmap by remember(previewPage) { mutableStateOf<Bitmap?>(null) }
+
+    // previewPage 变化时回收旧的缩略图，避免内存泄漏
+    DisposableEffect(previewPage) {
+        onDispose {
+            previewBitmap?.let { bmp ->
+                if (!bmp.isRecycled) runCatching { bmp.recycle() }
+                previewBitmap = null
+            }
+        }
+    }
 
     LaunchedEffect(previewPage, isDragging) {
         if (isDragging) {

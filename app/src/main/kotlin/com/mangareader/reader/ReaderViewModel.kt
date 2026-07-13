@@ -54,8 +54,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     // L1（内存，前后各 15 页窗口）+ L2（磁盘）缓存管理器
     private val cacheManager = PageCacheManager(application)
     // 处理后的位图仅保留当前页（随设置变化即失效）
-    private val processedBitmapCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Bitmap>(2, 0.75f, true))
-    private val maxProcessedCacheSize = 3
+    private val processedBitmapCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Bitmap>(16, 0.75f, true))
+    private val maxProcessedCacheSize = 10
     private var progressJob: kotlinx.coroutines.Job? = null
     private var cachePageJob: kotlinx.coroutines.Job? = null
     private var panelJob: kotlinx.coroutines.Job? = null

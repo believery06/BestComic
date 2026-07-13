@@ -39,10 +39,13 @@ class PageCacheManager(context: Context) {
         private const val PREFETCH_RANGE = 15
         // 后台预加载并发度：适当提高并发以提升快速滚动时的加载速度
         private const val PREFETCH_CONCURRENCY = 3
+        // 内存缓存总字节上限：约 120MB（约 15 张 1080x1920 ARGB_8888 位图）
+        private const val MEMORY_LIMIT_BYTES = 120L * 1024 * 1024
     }
 
-    // 以页索引为 key 的内存缓存；synchronizedMap 保证读写线程安全
-    private val memoryCache = Collections.synchronizedMap(LinkedHashMap<Int, Bitmap>())
+    // 以页索引为 key 的内存缓存；accessOrder=true 实现 LRU 读写线程安全
+    private val memoryCache = Collections.synchronizedMap(LinkedHashMap<Int, Bitmap>(16, 0.75f, true))
+    private val memoryUsed = java.util.concurrent.atomic.AtomicLong(0L)
 
     @Volatile
     private var currentCacheId: String? = null
@@ -204,15 +207,23 @@ class PageCacheManager(context: Context) {
     /** 低内存时只保留当前页。 */
     fun onLowMemory() {
         val keep = currentIndexValue
-        synchronized(memoryCache) {
+        val toRecycle = synchronized(memoryCache) {
             val iterator = memoryCache.entries.iterator()
+            val collected = mutableListOf<Bitmap>()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
                 if (entry.key == keep) continue
-                entry.value.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
                 iterator.remove()
+                collected.add(entry.value)
             }
+            collected
         }
+        var freed = 0L
+        for (bmp in toRecycle) {
+            freed += bmp.allocationByteCount.toLong()
+            if (!bmp.isRecycled) runCatching { bmp.recycle() }
+        }
+        memoryUsed.addAndGet(-freed)
     }
 
     /** 后台预加载当前页前后 [PREFETCH_RANGE] 页，按 [direction] 决定优先级。 */
@@ -260,7 +271,7 @@ class PageCacheManager(context: Context) {
         }
     }
 
-    /** 加载一页并放入内存缓存。 */
+    /** 加载一页并放入内存缓存，超出内存上限时淘汰最久未使用的位图。 */
     private suspend fun loadIntoMemory(provider: ComicProvider, index: Int) {
         if (index !in 0 until provider.pageCount) return
 
@@ -270,12 +281,37 @@ class PageCacheManager(context: Context) {
         }?.let { return }
 
         val bmp = getPage(provider, index) ?: return
+        val bytes = bmp.allocationByteCount.toLong()
         val old = synchronized(memoryCache) {
-            memoryCache.put(index, bmp)
+            val previous = memoryCache.put(index, bmp)
+            if (previous == null) memoryUsed.addAndGet(bytes) else memoryUsed.addAndGet(bytes - previous.allocationByteCount.toLong())
+            previous
         }
         // 如果 map 中已有同索引位图（理论上不应发生），回收旧的
         if (old != null && old !== bmp && !old.isRecycled) {
             runCatching { old.recycle() }
+        }
+        // 超出内存上限时淘汰最久未使用的页面（保留当前页）
+        evictOldestIfNeeded()
+    }
+
+    /** 超出 [MEMORY_LIMIT_BYTES] 时淘汰最久未使用的位图，保留 [currentIndexValue]。 */
+    private fun evictOldestIfNeeded() {
+        while (memoryUsed.get() > MEMORY_LIMIT_BYTES) {
+            val victim = synchronized(memoryCache) {
+                val it = memoryCache.entries.iterator()
+                while (it.hasNext()) {
+                    val entry = it.next()
+                    if (entry.key == currentIndexValue) continue
+                    it.remove()
+                    return@synchronized entry.value
+                }
+                return@synchronized null
+            } ?: break
+            if (!victim.isRecycled) {
+                memoryUsed.addAndGet(-victim.allocationByteCount.toLong())
+                runCatching { victim.recycle() }
+            }
         }
     }
 
@@ -288,6 +324,7 @@ class PageCacheManager(context: Context) {
             }
             memoryCache.clear()
         }
+        memoryUsed.set(0L)
         currentIndexValue = -1
     }
 

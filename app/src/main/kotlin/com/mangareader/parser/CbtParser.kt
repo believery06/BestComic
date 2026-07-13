@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
+import java.io.FilterInputStream
 import java.io.InputStream
 
 /** CBT parser that reopens the TAR and scans to one entry on demand. */
@@ -62,18 +63,33 @@ class CbtParser : ComicParser {
         val (context, uri) = synchronized(stateLock) {
             (appContext ?: return null) to (sourceUri ?: return null)
         }
-        val source = context.contentResolver.openInputStream(uri) ?: return null
+        val source: InputStream = context.contentResolver.openInputStream(uri) ?: return null
         val tar = TarArchiveInputStream(BufferedInputStream(source))
         return try {
             var entry = tar.nextEntry
             while (entry != null) {
-                if (!entry.isDirectory && entry.name == name) return tar
+                if (!entry.isDirectory && entry.name == name) {
+                    // 用 FilterInputStream 包装，保证 close() 同时关闭 tar 和底层 source
+                    // 避免每个页面都泄漏一个文件描述符
+                    return object : FilterInputStream(tar) {
+                        private var closed = false
+                        override fun close() {
+                            if (!closed) {
+                                closed = true
+                                runCatching { super.close() }
+                                runCatching { source.close() }
+                            }
+                        }
+                    }
+                }
                 entry = tar.nextEntry
             }
             tar.close()
+            runCatching { source.close() }
             null
         } catch (e: Exception) {
             runCatching { tar.close() }
+            runCatching { source.close() }
             null
         }
     }
