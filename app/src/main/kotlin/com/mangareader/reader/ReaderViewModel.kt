@@ -390,6 +390,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         provider = null
         cacheManager.clearMemory()
         cacheManager.clearDisk()
+        autoSaveBookmarkOnExit()
         synchronized(processedBitmapCache) {
             processedBitmapCache.values.forEach { bmp ->
                 if (!bmp.isRecycled) runCatching { bmp.recycle() }
@@ -588,6 +589,24 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = _uiState.value.copy(bookmarks = newBookmarks)
         bookmarkJob?.cancel()
         bookmarkJob = viewModelScope.launch { settingsRepository.removeBookmark(uri, page) }
+    }
+
+    /**
+     * 退出阅读时自动保存书签：若当前页没有书签且已阅读超过 3 页，则自动创建恢复书签。
+     * 避免用户忘记手动书签而丢失阅读位置。
+     */
+    private fun autoSaveBookmarkOnExit() {
+        val uri = comicUri ?: return
+        val currentPage = _uiState.value.currentPage
+        if (bookmarks.contains(currentPage)) return
+        val totalPages = pages.size
+        if (totalPages > 3 && currentPage > 0 && currentPage < totalPages - 1) {
+            val newBookmarks = bookmarks + currentPage
+            bookmarks = newBookmarks
+            _uiState.value = _uiState.value.copy(bookmarks = newBookmarks)
+            bookmarkJob?.cancel()
+            bookmarkJob = viewModelScope.launch { settingsRepository.addBookmark(uri, currentPage) }
+        }
     }
 
     /**

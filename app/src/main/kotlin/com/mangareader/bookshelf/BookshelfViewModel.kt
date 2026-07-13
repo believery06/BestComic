@@ -13,6 +13,7 @@ import com.mangareader.parser.FolderParser
 import com.mangareader.parser.ParserFactory
 import com.mangareader.utils.CoverExtractor
 import com.mangareader.utils.FileListHelper
+import com.mangareader.utils.ParallelCoverExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -266,20 +267,22 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
      */
     private fun extractCovers(comics: List<ComicEntry>) {
         coverJob?.cancel()
+        val app = getApplication<android.app.Application>()
+        val needExtraction = comics.filter { it.coverUri == null }
+        if (needExtraction.isEmpty()) return
+
         coverJob = viewModelScope.launch(Dispatchers.IO) {
             val updated = comics.toMutableList()
-            for (i in comics.indices) {
-                val entry = comics[i]
-                if (entry.coverUri != null) continue
 
-                val cover = if (entry.isDirectory) {
-                    findCover(entry.uri, entry.type)
-                } else {
-                    CoverExtractor.extractCover(getApplication(), entry.uri, entry.type)
-                }
-                if (cover != null) {
-                    updated[i] = entry.copy(coverUri = cover)
-                    _uiState.value = _uiState.value.copy(comics = updated.toList())
+            ParallelCoverExtractor.extractCoversParallel(app, needExtraction) { entry, coverUri ->
+                if (coverUri != null) {
+                    synchronized(updated) {
+                        val idx = updated.indexOfFirst { it.uri == entry.uri }
+                        if (idx >= 0) {
+                            updated[idx] = updated[idx].copy(coverUri = coverUri)
+                            _uiState.value = _uiState.value.copy(comics = updated.toList())
+                        }
+                    }
                 }
             }
         }

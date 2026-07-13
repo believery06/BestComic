@@ -121,6 +121,26 @@ fun ReaderScreen(
 
     var scale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var showExitConfirm by remember { mutableStateOf(false) }
+
+    // 退出阅读确认对话框
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            icon = { Icon(Icons.Default.ExitToApp, contentDescription = null) },
+            title = { Text("退出阅读") },
+            text = { Text("确定要退出当前漫画吗？阅读进度已自动保存。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitConfirm = false
+                    onBack()
+                }) { Text("退出") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitConfirm = false }) { Text("取消") }
+            }
+        )
+    }
 
     LaunchedEffect(state.currentPage, state.settings.dualPage, state.settings.rtl, state.settings.scrollMode, state.settingsVersion) {
         scale = 1f
@@ -150,7 +170,7 @@ fun ReaderScreen(
         } else if (state.showMenu) {
             viewModel.hideMenu()
         } else {
-            onBack()
+            showExitConfirm = true
         }
     }
 
@@ -206,6 +226,7 @@ fun ReaderScreen(
                         zoomMode = state.settings.zoomMode,
                         pageAnimation = state.settings.pageAnimation,
                         randomAnimation = state.settings.randomAnimation,
+                        pageAnimSpeed = state.settings.pageAnimSpeed,
                         enableZoom = state.settings.enableZoom,
                         tapZoneSize = state.settings.tapZoneSize,
                         magnifierEnabled = state.settings.magnifierEnabled,
@@ -326,6 +347,7 @@ private fun PageViewer(
     zoomMode: ZoomMode,
     pageAnimation: com.mangareader.data.PageAnimation,
     randomAnimation: Boolean = false,
+    pageAnimSpeed: Float = 1.0f,
     enableZoom: Boolean,
     tapZoneSize: com.mangareader.data.TapZoneSize,
     magnifierEnabled: Boolean,
@@ -574,19 +596,22 @@ private fun PageViewer(
                 ) { renderPage(currentPage) }
             }
             com.mangareader.data.PageAnimation.SLIDE -> {
+                val speed = pageAnimSpeed.coerceIn(0.2f, 3.0f)
+                val slideDur = (220 / speed).toInt()
+                val fadeDur = (200 / speed).toInt()
                 AnimatedContent(
                     targetState = currentPage,
                     transitionSpec = {
                         val forward = targetState > initialState
                         val enter = if (rtl) {
-                            slideInHorizontally(tween(220)) { if (forward) -it else it } + fadeIn(tween(200))
+                            slideInHorizontally(tween(slideDur)) { if (forward) -it else it } + fadeIn(tween(fadeDur))
                         } else {
-                            slideInHorizontally(tween(220)) { if (forward) it else -it } + fadeIn(tween(200))
+                            slideInHorizontally(tween(slideDur)) { if (forward) it else -it } + fadeIn(tween(fadeDur))
                         }
                         val exit = if (rtl) {
-                            slideOutHorizontally(tween(220)) { if (forward) it else -it } + fadeOut(tween(200))
+                            slideOutHorizontally(tween(slideDur)) { if (forward) it else -it } + fadeOut(tween(fadeDur))
                         } else {
-                            slideOutHorizontally(tween(220)) { if (forward) -it else it } + fadeOut(tween(200))
+                            slideOutHorizontally(tween(slideDur)) { if (forward) -it else it } + fadeOut(tween(fadeDur))
                         }
                         enter togetherWith exit
                     },
@@ -640,10 +665,11 @@ private fun PageViewer(
                 )
             }
             com.mangareader.data.PageAnimation.FADE -> {
+                val fadeDur = (250 / pageAnimSpeed.coerceIn(0.2f, 3.0f)).toInt()
                 AnimatedContent(
                     targetState = currentPage,
                     transitionSpec = {
-                        fadeIn(tween(250)) togetherWith fadeOut(tween(250))
+                        fadeIn(tween(fadeDur)) togetherWith fadeOut(tween(fadeDur))
                     },
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -659,10 +685,11 @@ private fun PageViewer(
             }
             else -> {
                 // 像素/百叶窗/碎裂/网点等盲盒动效：先用淡入淡出兜底，避免 NoWhenBranchMatched 崩溃
+                val fallbackDur = (260 / pageAnimSpeed.coerceIn(0.2f, 3.0f)).toInt()
                 AnimatedContent(
                     targetState = currentPage,
                     transitionSpec = {
-                        fadeIn(tween(260)) togetherWith fadeOut(tween(260))
+                        fadeIn(tween(fallbackDur)) togetherWith fadeOut(tween(fallbackDur))
                     },
                     contentAlignment = Alignment.Center,
                     modifier = Modifier

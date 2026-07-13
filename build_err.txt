@@ -3,7 +3,7 @@ WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.i
 WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
 WARNING: Restricted methods will be blocked in a future release unless native access is enabled
 
-e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker12902578597957282471.tmp
+e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker5803217188702922402.tmp
 e: Daemon compilation failed: Could not connect to Kotlin compile daemon
 java.lang.RuntimeException: Could not connect to Kotlin compile daemon
 	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.compileWithDaemon(GradleKotlinCompilerWork.kt:218)
@@ -89,6 +89,9 @@ exception:                                 ^
 exception: app\src\main\kotlin\com\mangareader\parser\EpubParser.kt:159:9: warning: parameter 'imageKeys' is never used
 exception:         imageKeys: Set<String>
 exception:         ^
+exception: app\src\main\kotlin\com\mangareader\reader\ReaderScreen.kt:130:41: warning: 'ExitToApp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ExitToApp
+exception:             icon = { Icon(Icons.Default.ExitToApp, contentDescription = null) },
+exception:                                         ^
 exception: app\src\main\kotlin\com\mangareader\utils\CoverExtractor.kt:133:35: warning: there is more than one label with such a name in this scope
 exception:                             return@use BitmapFactory.decodeByteArray(data, 0, data.size)
 exception:                                   ^

@@ -60,6 +60,7 @@ class SettingsRepository(private val context: Context) {
         private val KEY_EYE_CARE = booleanPreferencesKey("eye_care")
         private val KEY_VOLUME_KEY_NAV = booleanPreferencesKey("volume_key_nav")
         private val KEY_PAGE_ANIMATION = stringPreferencesKey("page_animation")
+        private val KEY_PAGE_ANIM_SPEED = floatPreferencesKey("page_anim_speed")
         private val KEY_RANDOM_ANIMATION = booleanPreferencesKey("random_animation")
         private val KEY_BG_TEXTURE = stringPreferencesKey("bg_texture")
         private val KEY_TRACKED_URIS = stringPreferencesKey("tracked_uris")
@@ -113,6 +114,7 @@ class SettingsRepository(private val context: Context) {
             pageAnimation = runCatching { PageAnimation.valueOf(prefs[KEY_PAGE_ANIMATION] ?: "NONE") }
                 .getOrDefault(PageAnimation.NONE),
             randomAnimation = prefs[KEY_RANDOM_ANIMATION] ?: false,
+            pageAnimSpeed = prefs[KEY_PAGE_ANIM_SPEED] ?: 1.0f,
             enableZoom = prefs[KEY_ENABLE_ZOOM] ?: false,
             sharpenStrength = prefs[KEY_SHARPEN_STRENGTH] ?: 1f,
             denoiseStrength = prefs[KEY_DENOISE_STRENGTH] ?: 1f,
@@ -156,6 +158,7 @@ class SettingsRepository(private val context: Context) {
             prefs[KEY_VOLUME_KEY_NAV] = settings.volumeKeyNav
             prefs[KEY_PAGE_ANIMATION] = settings.pageAnimation.name
             prefs[KEY_RANDOM_ANIMATION] = settings.randomAnimation
+            prefs[KEY_PAGE_ANIM_SPEED] = settings.pageAnimSpeed
             prefs[KEY_BG_TEXTURE] = settings.backgroundTexture.name
             prefs[KEY_ENABLE_ZOOM] = settings.enableZoom
             prefs[KEY_SHARPEN_STRENGTH] = settings.sharpenStrength
@@ -543,6 +546,7 @@ data class ReaderSettings(
     val volumeKeyNav: Boolean = false,
     val pageAnimation: PageAnimation = PageAnimation.NONE,
     val randomAnimation: Boolean = false,       // 每次翻页随机一种动效
+    val pageAnimSpeed: Float = 1.0f,           // 翻页动画速度倍率 (0.2f - 3.0f)
     val enableZoom: Boolean = false,
     val sharpenStrength: Float = 1f,
     val denoiseStrength: Float = 1f,
