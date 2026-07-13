@@ -57,12 +57,6 @@ fun ContactAuthorDialog(onDismiss: () -> Unit) {
                         textAlign = TextAlign.Center
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "修改方式：打开 app/src/main/kotlin/com/mangareader/Constants.kt，把 AUTHOR_CONTACT 改成你的联系方式，然后重新编译。",
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center
-                )
             }
         },
         confirmButton = {

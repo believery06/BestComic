@@ -204,26 +204,19 @@ class PageCacheManager(context: Context) {
         thumbDiskCache.clear()
     }
 
-    /** 低内存时只保留当前页。 */
+    /** 低内存时只保留当前页，移除其他缓存条目但不回收位图，避免 UI 线程正在使用时回收导致闪退。 */
     fun onLowMemory() {
         val keep = currentIndexValue
-        val toRecycle = synchronized(memoryCache) {
+        synchronized(memoryCache) {
             val iterator = memoryCache.entries.iterator()
-            val collected = mutableListOf<Bitmap>()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
                 if (entry.key == keep) continue
                 iterator.remove()
-                collected.add(entry.value)
             }
-            collected
         }
-        var freed = 0L
-        for (bmp in toRecycle) {
-            freed += bmp.allocationByteCount.toLong()
-            if (!bmp.isRecycled) runCatching { bmp.recycle() }
-        }
-        memoryUsed.addAndGet(-freed)
+        memoryUsed.set(0L)
+        // 不再主动 recycle，让 GC 在位图不再被引用时自然回收，避免 UI 线程闪退
     }
 
     /** 后台预加载当前页前后 [PREFETCH_RANGE] 页，按 [direction] 决定优先级。 */
@@ -295,10 +288,12 @@ class PageCacheManager(context: Context) {
         evictOldestIfNeeded()
     }
 
-    /** 超出 [MEMORY_LIMIT_BYTES] 时淘汰最久未使用的位图，保留 [currentIndexValue]。 */
+    /** 超出 [MEMORY_LIMIT_BYTES] 时移除最久未使用的位图，保留 [currentIndexValue]。
+     *  注意：仅从缓存移除，不调用 recycle()，避免 UI 线程正在使用时回收导致闪退。
+     *  内存上限是硬约束，移除后 GC 会在位图不再被引用时自然回收。 */
     private fun evictOldestIfNeeded() {
         while (memoryUsed.get() > MEMORY_LIMIT_BYTES) {
-            val victim = synchronized(memoryCache) {
+            val removed = synchronized(memoryCache) {
                 val it = memoryCache.entries.iterator()
                 while (it.hasNext()) {
                     val entry = it.next()
@@ -308,10 +303,8 @@ class PageCacheManager(context: Context) {
                 }
                 return@synchronized null
             } ?: break
-            if (!victim.isRecycled) {
-                memoryUsed.addAndGet(-victim.allocationByteCount.toLong())
-                runCatching { victim.recycle() }
-            }
+            // 不 recycle，避免 UI 线程正在使用该位图时闪退
+            memoryUsed.addAndGet(-removed.allocationByteCount.toLong())
         }
     }
 

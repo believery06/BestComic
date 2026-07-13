@@ -175,10 +175,21 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun clearProcessedCache() {
         synchronized(processedBitmapCache) {
+            // onCleared 时才回收，避免 UI 线程正在使用时回收导致闪退
             processedBitmapCache.values.forEach { bmp ->
                 if (!bmp.isRecycled) runCatching { bmp.recycle() }
             }
             processedBitmapCache.clear()
+        }
+    }
+
+    /** LRU 淘汰时仅从缓存移除，不回收位图，避免 UI 线程正在使用时回收导致闪退。 */
+    private fun evictProcessedCache() {
+        synchronized(processedBitmapCache) {
+            while (processedBitmapCache.size > maxProcessedCacheSize) {
+                val firstKey = processedBitmapCache.keys.firstOrNull() ?: break
+                processedBitmapCache.remove(firstKey)
+            }
         }
     }
 
@@ -450,19 +461,24 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             if (result !== rawBmp) {
                 synchronized(processedBitmapCache) {
                     processedBitmapCache[cacheKey] = result
-                    while (processedBitmapCache.size > maxProcessedCacheSize) {
-                        val firstKey = processedBitmapCache.keys.firstOrNull() ?: break
-                        val evicted = processedBitmapCache.remove(firstKey)
-                        if (evicted != null && evicted !== result && !evicted.isRecycled) {
-                            runCatching { evicted.recycle() }
-                        }
-                    }
                 }
+                // 仅移除最旧的缓存条目，不回收位图，避免 UI 线程闪退
+                evictProcessedCache()
             }
             result
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        }
+    }
+
+    /**
+     * 安全获取已处理位图：若已回收则返回 null，避免 UI 层闪退。
+     */
+    fun getCachedProcessedBitmap(index: Int, version: Int): Bitmap? {
+        val cacheKey = "${index}_${version}"
+        return synchronized(processedBitmapCache) {
+            processedBitmapCache[cacheKey]?.takeIf { !it.isRecycled }
         }
     }
 

@@ -11,73 +11,103 @@ import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import java.io.File
 import java.io.FileInputStream
-import java.io.FilterInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 
-/** CB7 parser that gives each page stream its own archive handle. */
+/**
+ * CB7 解析器：解析时将所有图片提取到临时文件，后续按页随机读取。
+ * 避免每页都重新打开 7z 并全量扫描，大幅提升翻页性能。
+ */
 class Cb7Parser : ComicParser {
     private val stateLock = Any()
-    private var appContext: Context? = null
-    private var sourceUri: Uri? = null
+    private var entryFiles: List<File> = emptyList()
+    private var tempDir: File? = null
 
-    override fun close() = synchronized(stateLock) {
-        appContext = null
-        sourceUri = null
+    override fun close() {
+        synchronized(stateLock) {
+            // 清理临时文件
+            entryFiles.forEach { runCatching { it.delete() } }
+            entryFiles = emptyList()
+            tempDir?.let { runCatching { it.deleteRecursively() } }
+            tempDir = null
+        }
     }
 
     override suspend fun parse(context: Context, uri: Uri): ParserResult = withContext(Dispatchers.IO) {
         try {
-            val names = openArchive(context, uri).use { handle ->
-                buildList {
-                    var entry = handle.archive.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory && ParserFactory.isImageFile(entry.name)) add(entry.name)
-                        entry = handle.archive.nextEntry
+            close()
+
+            val dir = File(context.cacheDir, "cb7_${uri.hashCode()}_${System.currentTimeMillis()}").apply { mkdirs() }
+            tempDir = dir
+
+            val extracted = mutableListOf<File>()
+            val handle = openArchive(context, uri)
+            try {
+                var entry = handle.archive.nextEntry
+                var index = 0
+                while (entry != null) {
+                    if (!entry.isDirectory && ParserFactory.isImageFile(entry.name)) {
+                        val safeName = "img_${index}_${entry.name.replace("/", "_").replace("\\", "_")}"
+                        val outFile = File(dir, safeName)
+                        handle.archive.getInputStream(entry).use { input ->
+                            FileOutputStream(outFile).use { output ->
+                                input.copyTo(output, 131072)
+                            }
+                        }
+                        if (outFile.length() > 0L) {
+                            extracted.add(outFile)
+                            index++
+                        }
                     }
+                    entry = handle.archive.nextEntry
                 }
+            } finally {
+                handle.close()
             }
-            if (names.isEmpty()) return@withContext ParserResult.Error("CB7 文件中没有找到图片")
-            val sorted = names.sortedWith(FolderParser::compareNames)
-            synchronized(stateLock) {
-                appContext = context.applicationContext
-                sourceUri = uri
+
+            if (extracted.isEmpty()) {
+                close()
+                return@withContext ParserResult.Error("CB7 文件中没有找到图片")
             }
-            ParserResult.Success(sorted.mapIndexed { index, name ->
-                ComicPage(index, name, load = { decodePage(name) }, loadStream = { openEntry(name) })
-            }, ComicType.CB7)
+
+            // 按原始文件名排序：提取文件名中的数字部分用于自然排序
+            val sorted = extracted.sortedWith { a, b ->
+                val nameA = a.name.removePrefix("img_").substringAfter("_")
+                val nameB = b.name.removePrefix("img_").substringAfter("_")
+                FolderParser.compareNames(nameA, nameB)
+            }
+
+            entryFiles = sorted
+
+            ParserResult.Success(
+                sorted.mapIndexed { idx, file ->
+                    ComicPage(
+                        index = idx,
+                        name = file.name,
+                        load = { decodePage(file) },
+                        loadStream = { openEntry(file) }
+                    )
+                },
+                ComicType.CB7
+            )
         } catch (e: Exception) {
             close()
             ParserResult.Error("CB7 解析失败：${e.message ?: "未知错误"}")
         }
     }
 
-    private suspend fun decodePage(name: String) = withContext(Dispatchers.IO) {
-        openEntry(name)?.use(BitmapFactory::decodeStream)
+    private suspend fun decodePage(file: File) = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!file.exists() || file.length() == 0L) return@runCatching null
+            BitmapFactory.decodeFile(file.absolutePath)
+        }.getOrNull()
     }
 
-    private fun openEntry(name: String): InputStream? {
-        val (context, uri) = synchronized(stateLock) {
-            (appContext ?: return null) to (sourceUri ?: return null)
-        }
-        val handle = runCatching { openArchive(context, uri) }.getOrNull() ?: return null
-        return try {
-            var entry = handle.archive.nextEntry
-            while (entry != null && entry.name != name) entry = handle.archive.nextEntry
-            if (entry == null) {
-                handle.close()
-                null
-            } else {
-                object : FilterInputStream(handle.archive.getInputStream(entry)) {
-                    override fun close() {
-                        runCatching { super.close() }
-                        handle.close()
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            handle.close()
-            null
-        }
+    private fun openEntry(file: File): InputStream? {
+        return runCatching {
+            if (!file.exists() || file.length() == 0L) return null
+            FileInputStream(file)
+        }.getOrNull()
     }
 
     private fun openArchive(context: Context, uri: Uri): ArchiveHandle {

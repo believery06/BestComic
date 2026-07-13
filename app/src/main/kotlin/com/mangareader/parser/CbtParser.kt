@@ -9,88 +9,100 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
-import java.io.FilterInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 
-/** CBT parser that reopens the TAR and scans to one entry on demand. */
+/**
+ * CBT (TAR) 解析器：解析时将所有图片提取到临时文件，后续按页随机读取。
+ * TAR 不支持随机访问，避免每页都重新打开并全量扫描，大幅提升翻页性能。
+ */
 class CbtParser : ComicParser {
     private val stateLock = Any()
-    private var appContext: Context? = null
-    private var sourceUri: Uri? = null
+    private var entryFiles: List<File> = emptyList()
+    private var tempDir: File? = null
 
     override fun close() {
         synchronized(stateLock) {
-            appContext = null
-            sourceUri = null
+            entryFiles.forEach { runCatching { it.delete() } }
+            entryFiles = emptyList()
+            tempDir?.let { runCatching { it.deleteRecursively() } }
+            tempDir = null
         }
     }
 
     override suspend fun parse(context: Context, uri: Uri): ParserResult = withContext(Dispatchers.IO) {
         try {
-            val names: List<String> = context.contentResolver.openInputStream(uri)?.use { stream ->
+            close()
+
+            val dir = File(context.cacheDir, "cbt_${uri.hashCode()}_${System.currentTimeMillis()}").apply { mkdirs() }
+            tempDir = dir
+
+            val extracted = mutableListOf<File>()
+            context.contentResolver.openInputStream(uri)?.use { stream ->
                 TarArchiveInputStream(BufferedInputStream(stream)).use { tar ->
-                    val result = mutableListOf<String>()
-                        var entry = tar.nextEntry
-                        while (entry != null) {
-                            if (!entry.isDirectory && ParserFactory.isImageFile(entry.name)) result.add(entry.name)
-                            entry = tar.nextEntry
+                    var entry = tar.nextEntry
+                    var index = 0
+                    while (entry != null) {
+                        if (!entry.isDirectory && ParserFactory.isImageFile(entry.name)) {
+                            val safeName = "img_${index}_${entry.name.replace("/", "_").replace("\\", "_")}"
+                            val outFile = File(dir, safeName)
+                            FileOutputStream(outFile).use { output ->
+                                tar.copyTo(output, 131072)
+                            }
+                            if (outFile.length() > 0L) {
+                                extracted.add(outFile)
+                                index++
+                            }
                         }
-                    result
+                        entry = tar.nextEntry
+                    }
                 }
             } ?: return@withContext ParserResult.Error("无法打开 CBT 文件")
 
-            if (names.isEmpty()) return@withContext ParserResult.Error("CBT 文件中没有找到图片")
-            val sorted = names.sortedWith(FolderParser::compareNames)
-            synchronized(stateLock) {
-                appContext = context.applicationContext
-                sourceUri = uri
+            if (extracted.isEmpty()) {
+                close()
+                return@withContext ParserResult.Error("CBT 文件中没有找到图片")
             }
-            val pages = sorted.mapIndexed { index, name ->
-                ComicPage(index, name, load = { decodePage(name) }, loadStream = { openEntry(name) })
+
+            // 按原始文件名排序
+            val sorted = extracted.sortedWith { a, b ->
+                val nameA = a.name.removePrefix("img_").substringAfter("_")
+                val nameB = b.name.removePrefix("img_").substringAfter("_")
+                FolderParser.compareNames(nameA, nameB)
             }
-            ParserResult.Success(pages, ComicType.CBT)
+
+            entryFiles = sorted
+
+            ParserResult.Success(
+                sorted.mapIndexed { idx, file ->
+                    ComicPage(
+                        index = idx,
+                        name = file.name,
+                        load = { decodePage(file) },
+                        loadStream = { openEntry(file) }
+                    )
+                },
+                ComicType.CBT
+            )
         } catch (e: Exception) {
             close()
             ParserResult.Error("CBT 解析失败：${e.message ?: "未知错误"}")
         }
     }
 
-    private suspend fun decodePage(name: String) = withContext(Dispatchers.IO) {
-        openEntry(name)?.use(BitmapFactory::decodeStream)
+    private suspend fun decodePage(file: File) = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!file.exists() || file.length() == 0L) return@runCatching null
+            BitmapFactory.decodeFile(file.absolutePath)
+        }.getOrNull()
     }
 
-    private fun openEntry(name: String): InputStream? {
-        val (context, uri) = synchronized(stateLock) {
-            (appContext ?: return null) to (sourceUri ?: return null)
-        }
-        val source: InputStream = context.contentResolver.openInputStream(uri) ?: return null
-        val tar = TarArchiveInputStream(BufferedInputStream(source))
-        return try {
-            var entry = tar.nextEntry
-            while (entry != null) {
-                if (!entry.isDirectory && entry.name == name) {
-                    // 用 FilterInputStream 包装，保证 close() 同时关闭 tar 和底层 source
-                    // 避免每个页面都泄漏一个文件描述符
-                    return object : FilterInputStream(tar) {
-                        private var closed = false
-                        override fun close() {
-                            if (!closed) {
-                                closed = true
-                                runCatching { super.close() }
-                                runCatching { source.close() }
-                            }
-                        }
-                    }
-                }
-                entry = tar.nextEntry
-            }
-            tar.close()
-            runCatching { source.close() }
-            null
-        } catch (e: Exception) {
-            runCatching { tar.close() }
-            runCatching { source.close() }
-            null
-        }
+    private fun openEntry(file: File): InputStream? {
+        return runCatching {
+            if (!file.exists() || file.length() == 0L) return null
+            FileInputStream(file)
+        }.getOrNull()
     }
 }

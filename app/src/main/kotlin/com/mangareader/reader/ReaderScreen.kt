@@ -984,8 +984,10 @@ private fun PageImage(
 ) {
     var bitmap by remember(index) { mutableStateOf<Bitmap?>(null) }
     var error by remember(index) { mutableStateOf(false) }
+    // 用于在 bitmap 被回收时触发重新加载
+    var reloadToken by remember(index) { mutableIntStateOf(0) }
 
-    LaunchedEffect(index, settingsVersion) {
+    LaunchedEffect(index, settingsVersion, reloadToken) {
         bitmap = null
         error = false
         // 失败时最多重试 2 次，避免大图解码偶发错误导致一直转圈
@@ -1005,6 +1007,15 @@ private fun PageImage(
         error = true
     }
 
+    // 监察 bitmap 是否被回收，若被回收则触发重新加载
+    LaunchedEffect(bitmap) {
+        val bmp = bitmap ?: return@LaunchedEffect
+        if (bmp.isRecycled) {
+            bitmap = null
+            reloadToken++
+        }
+    }
+
     val contentScale = when {
         fillMaxHeight -> ContentScale.FillHeight
         fillMaxWidth -> ContentScale.FillWidth
@@ -1017,19 +1028,30 @@ private fun PageImage(
     }
 
     when {
-        bitmap != null && bitmap?.isRecycled == false -> {
+        bitmap != null && !bitmap!!.isRecycled -> {
+            val safeBmp = bitmap!!
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = "第 $index 页",
-                    contentScale = contentScale,
-                    alignment = imageAlignment,
-                    modifier = when {
-                        zoomMode == ZoomMode.FIT_WIDTH -> Modifier.fillMaxWidth().wrapContentHeight()
-                        zoomMode == ZoomMode.FIT_HEIGHT -> Modifier.fillMaxHeight().wrapContentWidth()
-                        else -> Modifier.fillMaxSize()
-                    }
-                )
+                // 用 runCatching 兜底 asImageBitmap，防止位图在渲染瞬间被回收导致闪退
+                val imageBitmap = runCatching { safeBmp.asImageBitmap() }.getOrNull()
+                if (imageBitmap != null && !safeBmp.isRecycled) {
+                    Image(
+                        bitmap = imageBitmap,
+                        contentDescription = "第 $index 页",
+                        contentScale = contentScale,
+                        alignment = imageAlignment,
+                        modifier = when {
+                            zoomMode == ZoomMode.FIT_WIDTH -> Modifier.fillMaxWidth().wrapContentHeight()
+                            zoomMode == ZoomMode.FIT_HEIGHT -> Modifier.fillMaxHeight().wrapContentWidth()
+                            else -> Modifier.fillMaxSize()
+                        }
+                    )
+                } else {
+                    Text(
+                        text = "加载中…",
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
         error -> {
