@@ -726,7 +726,6 @@ private fun PageViewer(
                         isCurling = false
                         if (curlForward) onTapNext() else onTapPrev()
                     },
-                    isLandscape = isLandscape,
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer(
