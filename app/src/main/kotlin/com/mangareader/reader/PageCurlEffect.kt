@@ -13,6 +13,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -36,6 +37,7 @@ fun PageCurlView(
     isForward: Boolean, // true=向前翻, false=向后翻
     triggerFlip: Boolean, // 外部触发翻页
     onFlipComplete: () -> Unit,
+    isLandscape: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var isDragging by remember { mutableStateOf(false) }
@@ -73,33 +75,58 @@ fun PageCurlView(
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        isDragging = true
-                        dragProgress = 0f
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        isAnimating = true
-                        if (abs(dragProgress) > 0.3f) {
-                            // 完成翻页
-                            animTarget = if (dragProgress > 0) 1f else -1f
-                        } else {
-                            // 回弹
+            .pointerInput(isLandscape) {
+                if (isLandscape) {
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            dragProgress = 0f
+                        },
+                        onDragEnd = {
+                            isDragging = false
+                            isAnimating = true
+                            if (abs(dragProgress) > 0.3f) {
+                                animTarget = if (dragProgress > 0) 1f else -1f
+                            } else {
+                                animTarget = 0f
+                            }
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                            isAnimating = true
                             animTarget = 0f
+                        },
+                        onVerticalDrag = { _, dragAmount ->
+                            dragProgress = (dragProgress + dragAmount / size.height)
+                                .coerceIn(-1f, 1f)
                         }
-                    },
-                    onDragCancel = {
-                        isDragging = false
-                        isAnimating = true
-                        animTarget = 0f
-                    },
-                    onHorizontalDrag = { _, dragAmount ->
-                        dragProgress = (dragProgress + dragAmount / size.width)
-                            .coerceIn(-1f, 1f)
-                    }
-                )
+                    )
+                } else {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            dragProgress = 0f
+                        },
+                        onDragEnd = {
+                            isDragging = false
+                            isAnimating = true
+                            if (abs(dragProgress) > 0.3f) {
+                                animTarget = if (dragProgress > 0) 1f else -1f
+                            } else {
+                                animTarget = 0f
+                            }
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                            isAnimating = true
+                            animTarget = 0f
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            dragProgress = (dragProgress + dragAmount / size.width)
+                                .coerceIn(-1f, 1f)
+                        }
+                    )
+                }
             }
     ) {
         val w = size.width
@@ -116,30 +143,44 @@ fun PageCurlView(
 
         // 绘制当前页的翻页效果
         if (currentBitmap != null && !currentBitmap.isRecycled && absP < 0.99f) {
-            val foldX = when {
-                p > 0 -> w * (1f - absP) // 向前翻：从右往左
-                else -> w * absP           // 向后翻：从左往右
+            val foldPos = when {
+                isLandscape -> when {
+                    p > 0 -> h * (1f - absP) // 向上翻：从下往上
+                    else -> h * absP           // 向下翻：从上往下
+                }
+                else -> when {
+                    p > 0 -> w * (1f - absP) // 向前翻：从右往左
+                    else -> w * absP           // 向后翻：从左往右
+                }
             }
 
-            // 阴影宽度
-            val shadowWidth = (w * 0.1f).coerceAtLeast(10f)
+            val alongLen = if (isLandscape) h else w
+            val shadowWidth = (alongLen * 0.1f).coerceAtLeast(10f)
 
-            clipRect(
-                left = if (p > 0) 0f else foldX + shadowWidth,
-                top = 0f,
-                right = if (p > 0) foldX + shadowWidth else w,
-                bottom = h
-            ) {
-                drawImage(
-                    image = currentBitmap.asImageBitmap()
-                )
+            if (isLandscape) {
+                clipRect(
+                    left = 0f,
+                    top = if (p > 0) 0f else foldPos + shadowWidth,
+                    right = w,
+                    bottom = if (p > 0) foldPos + shadowWidth else h
+                ) {
+                    drawImage(image = currentBitmap.asImageBitmap())
+                }
+            } else {
+                clipRect(
+                    left = if (p > 0) 0f else foldPos + shadowWidth,
+                    top = 0f,
+                    right = if (p > 0) foldPos + shadowWidth else w,
+                    bottom = h
+                ) {
+                    drawImage(image = currentBitmap.asImageBitmap())
+                }
             }
 
             // 绘制翻页阴影
             val shadowAlpha = (absP * 0.6f).coerceAtMost(0.6f)
             val canvas = drawContext.canvas.nativeCanvas
 
-            // 折叠线渐变阴影
             val shadowPaint = Paint().apply {
                 isAntiAlias = true
                 val gradientColors = intArrayOf(
@@ -147,31 +188,42 @@ fun PageCurlView(
                     Color.argb(0, 0, 0, 0)
                 )
                 val gradientPositions = floatArrayOf(0f, 1f)
-                shader = LinearGradient(
-                    if (p > 0) foldX else foldX + shadowWidth,
-                    0f,
-                    if (p > 0) foldX + shadowWidth else foldX,
-                    0f,
-                    gradientColors,
-                    gradientPositions,
-                    Shader.TileMode.CLAMP
-                )
+                shader = if (isLandscape) {
+                    LinearGradient(
+                        0f, if (p > 0) foldPos else foldPos,
+                        0f, if (p > 0) foldPos + shadowWidth else foldPos + shadowWidth,
+                        gradientColors,
+                        gradientPositions,
+                        Shader.TileMode.CLAMP
+                    )
+                } else {
+                    LinearGradient(
+                        if (p > 0) foldPos else foldPos + shadowWidth,
+                        0f,
+                        if (p > 0) foldPos + shadowWidth else foldPos,
+                        0f,
+                        gradientColors,
+                        gradientPositions,
+                        Shader.TileMode.CLAMP
+                    )
+                }
             }
-            canvas.drawRect(
-                if (p > 0) foldX else foldX,
-                0f,
-                if (p > 0) foldX + shadowWidth else foldX + shadowWidth,
-                h,
-                shadowPaint
-            )
+            if (isLandscape) {
+                canvas.drawRect(0f, if (p > 0) foldPos else foldPos, w, if (p > 0) foldPos + shadowWidth else foldPos + shadowWidth, shadowPaint)
+            } else {
+                canvas.drawRect(if (p > 0) foldPos else foldPos, 0f, if (p > 0) foldPos + shadowWidth else foldPos + shadowWidth, h, shadowPaint)
+            }
 
-            // 书脊微光
             val spinePaint = Paint().apply {
                 isAntiAlias = true
                 color = Color.argb((absP * 40).toInt(), 255, 255, 255)
                 strokeWidth = 2f
             }
-            canvas.drawLine(foldX, 0f, foldX, h, spinePaint)
+            if (isLandscape) {
+                canvas.drawLine(0f, foldPos, w, foldPos, spinePaint)
+            } else {
+                canvas.drawLine(foldPos, 0f, foldPos, h, spinePaint)
+            }
         }
     }
 }

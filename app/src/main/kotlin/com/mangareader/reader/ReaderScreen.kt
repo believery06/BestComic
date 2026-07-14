@@ -10,7 +10,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -627,6 +629,7 @@ private fun PageViewer(
         val density = LocalDensity.current
         val containerW = with(density) { maxWidth.toPx() }
         val containerH = with(density) { maxHeight.toPx() }
+        val isLandscape = containerW > containerH
         // 随机翻页动效：每次 currentPage 变化时随机选择一种（排除 NONE）
         val effectiveAnimation = if (randomAnimation) {
             remember(currentPage) {
@@ -658,12 +661,17 @@ private fun PageViewer(
                     targetState = animationKey,
                     transitionSpec = {
                         val forward = targetState.first > initialState.first
-                        val enter = if (rtl) {
+                        val useVerticalSlide = isLandscape
+                        val enter = if (useVerticalSlide) {
+                            slideInVertically(tween(slideDur)) { if (forward) it else -it } + fadeIn(tween(fadeDur))
+                        } else if (rtl) {
                             slideInHorizontally(tween(slideDur)) { if (forward) -it else it } + fadeIn(tween(fadeDur))
                         } else {
                             slideInHorizontally(tween(slideDur)) { if (forward) it else -it } + fadeIn(tween(fadeDur))
                         }
-                        val exit = if (rtl) {
+                        val exit = if (useVerticalSlide) {
+                            slideOutVertically(tween(slideDur)) { if (forward) -it else it } + fadeOut(tween(fadeDur))
+                        } else if (rtl) {
                             slideOutHorizontally(tween(slideDur)) { if (forward) it else -it } + fadeOut(tween(fadeDur))
                         } else {
                             slideOutHorizontally(tween(slideDur)) { if (forward) -it else it } + fadeOut(tween(fadeDur))
@@ -687,6 +695,15 @@ private fun PageViewer(
                 var nextBmp by remember { mutableStateOf<Bitmap?>(null) }
                 var prevBmp by remember { mutableStateOf<Bitmap?>(null) }
 
+                // 清理 CURL 动画位图，防止内存泄漏
+                DisposableEffect(Unit) {
+                    onDispose {
+                        currentBmp = null
+                        nextBmp = null
+                        prevBmp = null
+                    }
+                }
+
                 LaunchedEffect(currentPage, settingsVersion) {
                     val indices = computeDisplayIndices(currentPage)
                     currentBmp = loadPage(indices.firstOrNull() ?: 0)
@@ -709,6 +726,7 @@ private fun PageViewer(
                         isCurling = false
                         if (curlForward) onTapNext() else onTapPrev()
                     },
+                    isLandscape = isLandscape,
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer(

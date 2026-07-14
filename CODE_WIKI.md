@@ -1,4 +1,4 @@
-﻿# MangaReader 漫画阅读器 - Code Wiki
+# MangaReader 漫画阅读器 - Code Wiki
 
 ## 1. 项目概述
 
@@ -1180,5 +1180,40 @@ CBZ/CBR 等压缩包不再全量解压到磁盘，而是：
 |--------|------|--------|------|
 | pageAnimSpeed | Float | 1.0f | 翻页动画速度倍率 (0.2f - 3.0f) |
 | KEY_PAGE_ANIM_SPEED | Preferences Key | - | DataStore 存储键名 |
+
+---
+
+## 14. 翻页动画全面适配 (2026-07-14)
+
+### 14.1 横屏模式自动适配
+
+#### SLIDE 滑动动画
+- 横屏时自动切换为垂直滑动
+- 竖屏时使用水平滑动（支持 RTL 日漫）
+- 通过检测容器宽高比自动判断
+
+**相关文件：**
+- `ReaderScreen.kt` - `isLandscape` 检测逻辑
+- `PageCurlEffect.kt` - 支持垂直拖拽
+
+#### CURL 3D 仿真翻页
+- 横屏时使用垂直拖拽
+- 竖屏时使用水平拖拽
+- 翻页方向、阴影、书脊高光均适配横屏
+
+### 14.2 动画参数扩展
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| isLandscape | Boolean | false | 横屏模式标识 |
+
+### 14.3 内存管理优化
+
+#### CURL 动画位图清理
+- 新增 `DisposableEffect` 清理 CURL 动画位图
+- 防止切换页面或退出阅读时内存泄漏
+
+**相关文件：**
+- `ReaderScreen.kt` - CURL 动画块中的 `DisposableEffect`
 
 *文档更新时间：2026-07-14*
