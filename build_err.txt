@@ -3,7 +3,7 @@ WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.i
 WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
 WARNING: Restricted methods will be blocked in a future release unless native access is enabled
 
-e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker12866690391934185033.tmp
+e: java.nio.file.AccessDeniedException: C:\Users\19051\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker15502442845549855547.tmp
 e: Daemon compilation failed: Could not connect to Kotlin compile daemon
 java.lang.RuntimeException: Could not connect to Kotlin compile daemon
 	at org.jetbrains.kotlin.compilerRunner.GradleKotlinCompilerWork.compileWithDaemon(GradleKotlinCompilerWork.kt:218)

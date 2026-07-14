@@ -456,11 +456,28 @@ private fun PageViewer(
         }
     }
 
-    var curlTrigger by remember { mutableStateOf(false) }
-    var curlForward by remember { mutableStateOf(true) }
+    var curlTriggerKey by remember { mutableStateOf(0L) }
+    var curlDirection by remember { mutableStateOf(0) }
     var isCurling by remember { mutableStateOf(false) }
-    val realOnTapNext: () -> Unit = { if (pageAnimation == com.mangareader.data.PageAnimation.CURL) { curlForward = true; curlTrigger = !curlTrigger; isCurling = true } else onTapNext() }
-    val realOnTapPrev: () -> Unit = { if (pageAnimation == com.mangareader.data.PageAnimation.CURL) { curlForward = false; curlTrigger = !curlTrigger; isCurling = true } else onTapPrev() }
+
+    val realOnTapNext: () -> Unit = {
+        if (pageAnimation == com.mangareader.data.PageAnimation.CURL && !isCurling) {
+            curlDirection = 1
+            curlTriggerKey++
+            isCurling = true
+        } else if (pageAnimation != com.mangareader.data.PageAnimation.CURL) {
+            onTapNext()
+        }
+    }
+    val realOnTapPrev: () -> Unit = {
+        if (pageAnimation == com.mangareader.data.PageAnimation.CURL && !isCurling) {
+            curlDirection = -1
+            curlTriggerKey++
+            isCurling = true
+        } else if (pageAnimation != com.mangareader.data.PageAnimation.CURL) {
+            onTapPrev()
+        }
+    }
 
     val transformModifier = Modifier
         .fillMaxSize()
@@ -719,12 +736,15 @@ private fun PageViewer(
 
                 PageCurlView(
                     currentBitmap = currentBmp,
-                    nextBitmap = if (curlForward) nextBmp else prevBmp,
-                    isForward = curlForward,
-                    triggerFlip = curlTrigger,
+                    nextBitmap = if (curlDirection > 0) nextBmp else prevBmp,
+                    direction = curlDirection,
+                    triggerKey = curlTriggerKey,
                     onFlipComplete = {
                         isCurling = false
-                        if (curlForward) onTapNext() else onTapPrev()
+                        if (curlDirection > 0) onTapNext() else onTapPrev()
+                    },
+                    onFlipCancel = {
+                        isCurling = false
                     },
                     modifier = Modifier
                         .fillMaxSize()

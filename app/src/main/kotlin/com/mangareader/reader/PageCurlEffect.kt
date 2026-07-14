@@ -1,7 +1,6 @@
 package com.mangareader.reader
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -23,20 +22,24 @@ import kotlin.math.abs
 fun PageCurlView(
     currentBitmap: Bitmap?,
     nextBitmap: Bitmap?,
-    isForward: Boolean,
-    triggerFlip: Boolean,
+    direction: Int,
+    triggerKey: Long,
     onFlipComplete: () -> Unit,
+    onFlipCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var dragProgress by remember { mutableFloatStateOf(0f) }
     var targetProgress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    var isAnimating by remember { mutableStateOf(false) }
+    var dragDirection by remember { mutableIntStateOf(direction) }
 
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
-        animationSpec = tween(durationMillis = 300),
-        finishedListener = { finalValue ->
-            if (!isDragging && abs(finalValue) >= 0.99f) {
+        animationSpec = tween(durationMillis = 350),
+        finishedListener = { value ->
+            isAnimating = false
+            if (!isDragging && abs(value) >= 0.99f) {
                 onFlipComplete()
                 targetProgress = 0f
             }
@@ -44,38 +47,57 @@ fun PageCurlView(
         label = "curlProgress"
     )
 
-    val displayProgress = if (isDragging) dragProgress else animatedProgress
+    val displayProgress = when {
+        isDragging -> dragProgress
+        else -> animatedProgress * dragDirection
+    }
 
-    LaunchedEffect(triggerFlip) {
-        if (triggerFlip && !isDragging) {
-            targetProgress = if (isForward) 1f else -1f
+    LaunchedEffect(triggerKey) {
+        if (triggerKey > 0 && !isDragging) {
+            dragDirection = direction
+            isAnimating = true
+            targetProgress = 1f
         }
     }
 
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
+            .pointerInput(triggerKey) {
                 detectHorizontalDragGestures(
                     onDragStart = {
-                        isDragging = true
-                        dragProgress = 0f
+                        if (!isAnimating) {
+                            isDragging = true
+                            dragProgress = 0f
+                            dragDirection = direction
+                        }
                     },
                     onDragEnd = {
-                        isDragging = false
-                        if (abs(dragProgress) > 0.3f) {
-                            targetProgress = if (dragProgress > 0) 1f else -1f
-                        } else {
-                            targetProgress = 0f
+                        if (isDragging) {
+                            isDragging = false
+                            isAnimating = true
+                            if (abs(dragProgress) > 0.3f) {
+                                dragDirection = if (dragProgress > 0) 1 else -1
+                                targetProgress = 1f
+                            } else {
+                                targetProgress = 0f
+                                onFlipCancel()
+                            }
                         }
                     },
                     onDragCancel = {
-                        isDragging = false
-                        targetProgress = 0f
+                        if (isDragging) {
+                            isDragging = false
+                            isAnimating = true
+                            targetProgress = 0f
+                            onFlipCancel()
+                        }
                     },
                     onHorizontalDrag = { _, dragAmount ->
-                        dragProgress = (dragProgress + dragAmount / size.width)
-                            .coerceIn(-1f, 1f)
+                        if (isDragging) {
+                            dragProgress = (dragProgress + dragAmount / size.width)
+                                .coerceIn(-1f, 1f)
+                        }
                     }
                 )
             }

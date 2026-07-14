@@ -85,5 +85,5 @@ Try ./gradlew --stop if this issue persists.
 > Task :app:createDebugApkListingFileRedirect
 > Task :app:assembleDebug
 
-BUILD SUCCESSFUL in 3m 6s
+BUILD SUCCESSFUL in 2m 56s
 33 actionable tasks: 7 executed, 26 up-to-date
