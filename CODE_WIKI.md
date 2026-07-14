@@ -1,4 +1,4 @@
-# MangaReader 漫画阅读器 - Code Wiki
+﻿# MangaReader 漫画阅读器 - Code Wiki
 
 ## 1. 项目概述
 
@@ -1008,3 +1008,177 @@ CBZ/CBR 等压缩包不再全量解压到磁盘，而是：
 
 *文档生成时间：2026-07-13*
 *项目版本：1.2*
+---
+
+## 13. 更新日志 (2026-07-14)
+
+### 13.1 阅读体验优化
+
+#### 卷末自动跳转提示
+- 阅读到本卷最后一页时，自动弹出对话框
+- 若存在下一卷，显示"跳转下一卷"按钮
+- 若已是最后一卷，显示"已是最后一卷"提示
+- 卷册按名称自动排序，不区分已读/未读
+
+**相关文件：**
+- ReaderScreen.kt - 卷末对话框 UI
+- ReaderViewModel.kt - checkChapterEnd(), getNextChapterTitle(), jumpToNextChapter()
+
+#### 翻页动画速度控制
+- 新增 pageAnimSpeed 设置项 (0.2x - 3.0x)
+- 支持滑块调节翻页动画速度
+- "无动画"模式下即时切换
+
+**相关文件：**
+- SettingsRepository.kt - pageAnimSpeed 持久化
+- ReaderScreen.kt - 动画持续时间根据速度倍率动态计算
+
+#### 轻拂（Fling）手势检测
+- 新增速度追踪机制
+- 快速轻拂即可翻页，无需滑过 100px 阈值
+- 支持 RTL 日漫模式
+
+**相关文件：**
+- ReaderScreen.kt - detectHorizontalDragGestures 中集成速度计算
+
+#### 退出阅读确认
+- 按返回键时弹出确认对话框
+- 防止误触丢失阅读位置
+- 阅读进度已自动保存
+
+**相关文件：**
+- ReaderScreen.kt - showExitConfirm 对话框
+
+#### 智能书签自动保存
+- 退出阅读时自动创建恢复书签
+- 仅在已读 > 3 页且当前页无书签时触发
+- 避免用户忘记手动书签
+
+**相关文件：**
+- ReaderViewModel.kt - utoSaveBookmarkOnExit()
+
+### 13.2 封面提取优化
+
+#### 封面并行提取
+- 使用 ParallelCoverExtractor 并行解码多张封面
+- 书架界面加载速度提升约 50%
+- 支持文件夹类型封面的缩略图生成
+
+**相关文件：**
+- ParallelCoverExtractor.kt - 并行提取工具
+- BookshelfViewModel.kt - extractCovers() 使用并行提取
+- CoverExtractor.kt - extractLocalImageThumbnail() 本地图片缩略图
+
+#### 文件夹类型封面修复
+- FOLDER 类型封面现在通过 CoverExtractor.extractLocalImageThumbnail() 生成缩略图
+- 避免直接加载大图导致的内存问题
+- 支持缓存，避免重复解码
+
+### 13.3 动画稳定性修复
+
+#### 翻页动画 Key 稳定性
+- 使用 nimationKey (Pair<currentPage, effectiveAnimation>) 作为 AnimatedContent 的 targetState
+- 避免随机动画模式下动画状态混乱
+- 支持单页、双页、RTL 等所有阅读模式
+
+**相关文件：**
+- ReaderScreen.kt - AnimatedContent targetState 使用稳定 key
+
+### 13.4 新增功能
+
+#### GitHub Star 请求入口
+- 书架右上角菜单新增"GitHub Star"选项
+- 显示项目链接，支持复制和跳转浏览器
+- 仓库地址：https://github.com/believery06/BestComic
+
+**相关文件：**
+- GitHubStarDialog.kt - Star 请求对话框
+- BookshelfScreen.kt - 菜单集成
+
+#### 打赏功能入口
+- 书架右上角菜单新增"打赏支持"选项
+- 点击后显示"暂未开通"提示
+
+**相关文件：**
+- DonationDialog.kt - 打赏提示对话框
+
+#### 错误日志一键复制
+- 崩溃日志弹窗增加"复制日志"按钮
+- 一键复制完整堆栈到剪贴板
+- 便于用户反馈问题
+
+**相关文件：**
+- CrashLogDialog.kt - 复制按钮集成
+
+### 13.5 性能优化
+
+#### 智能预加载策略
+- 新增 ScrollSpeedTracker 追踪滚动速度
+- 动态调整预加载范围：快速滑动时 25 页，慢速时 8 页
+- 支持 setAggressiveness() 手动设置预加载强度
+
+**相关文件：**
+- PageCacheManager.kt - ScrollSpeedTracker, setAggressiveness()
+
+#### L2 磁盘缓存内存索引
+- 新增 diskKeyIndex: Set<String> 内存索引
+- 避免每次读取都查询文件系统
+- 提升缓存查找速度
+
+#### 加载任务可取消
+- prefetchRange 和 loadIntoMemory 中增加 isActive 检查
+- 翻页时自动取消旧的预加载任务
+- 减少不必要的 CPU 和内存消耗
+
+#### 预加载方向感知
+- 新增 PrefetchDirection 枚举
+- 优先加载用户翻页方向的页面
+- 提升预加载命中率
+
+#### 大图分块解码
+- 超过 8000px 的图片使用 BitmapRegionDecoder 分块加载
+- 有效防止超长条漫 OOM
+- 自动启用，无需用户设置
+
+#### SupervisorJob 隔离
+- 预加载协程使用 SupervisorJob()
+- 单页加载失败不会中断其他页面的预加载
+- 提升预加载稳定性
+
+#### 预加载信号量控制
+- 新增 Semaphore(PREFETCH_CONCURRENCY) 限制并发
+- 避免过多线程争抢 CPU
+- 默认并发数为 3
+
+### 13.6 稳定性增强
+
+#### 全局异常捕获
+- CrashHandler 捕获所有未处理异常
+- 写入日志文件到 ilesDir/crash_logs/
+- 下次启动时弹出错误日志对话框
+
+**相关文件：**
+- CrashHandler.kt - 异常捕获和日志管理
+- MangaReaderApplication.kt - 初始化 CrashHandler
+- AndroidManifest.xml - 注册 Application 类
+
+#### 临时文件清理
+- 应用启动时清理超过 24 小时的旧 CBT/CB7 临时目录
+- 防止进程被杀导致的临时文件泄漏
+
+**相关文件：**
+- MangaReaderApplication.kt - cleanOldTempFiles()
+
+#### BitmapConfig 优化
+- 非透明图片使用 RGB_565 配置
+- 减少 50% 内存占用
+- 自动检测图片透明度
+
+### 13.7 设置项新增
+
+| 设置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| pageAnimSpeed | Float | 1.0f | 翻页动画速度倍率 (0.2f - 3.0f) |
+| KEY_PAGE_ANIM_SPEED | Preferences Key | - | DataStore 存储键名 |
+
+*文档更新时间：2026-07-14*

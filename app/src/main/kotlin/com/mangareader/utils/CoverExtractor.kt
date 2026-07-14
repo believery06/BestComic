@@ -238,4 +238,35 @@ object CoverExtractor {
         return Bitmap.createScaledBitmap(src, newW, newH, true)
     }
 
+    // ── Local file ──────────────────────────────────────────────────────
+
+    /**
+     * 从本地图片文件创建缩略图。用于 FOLDER 类型的封面提取。
+     */
+    fun extractLocalImageThumbnail(context: Context, uri: Uri, maxDimension: Int = THUMB_MAX_SIZE): Uri? {
+        return try {
+            val cacheKey = safeCacheKey(uri.toString())
+            val cacheFile = File(context.cacheDir, "thumb_local_$cacheKey.png")
+            if (cacheFile.exists() && cacheFile.length() > 0) {
+                return Uri.fromFile(cacheFile)
+            }
+
+            val bitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream)
+            } ?: return null
+
+            val thumb = scaleDown(bitmap, maxDimension)
+            if (thumb !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+
+            FileOutputStream(cacheFile).use { out ->
+                thumb.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            thumb.recycle()
+
+            if (cacheFile.exists()) Uri.fromFile(cacheFile) else null
+        } catch (e: Exception) {
+            Log.w(TAG, "extractLocalImageThumbnail failed: $uri", e)
+            null
+        }
+    }
 }

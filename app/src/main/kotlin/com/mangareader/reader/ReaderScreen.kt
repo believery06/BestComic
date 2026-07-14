@@ -122,6 +122,37 @@ fun ReaderScreen(
     var scale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var showExitConfirm by remember { mutableStateOf(false) }
+    var showChapterEndDialog by remember { mutableStateOf(false) }
+
+    // 卷末跳转对话框
+    if (showChapterEndDialog) {
+        val isLastChapter = viewModel.checkChapterEnd().first
+        val nextChapterTitle = viewModel.getNextChapterTitle()
+        AlertDialog(
+            onDismissRequest = { showChapterEndDialog = false },
+            icon = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) },
+            title = { Text(if (isLastChapter) "已是最后一卷" else "本卷已读完") },
+            text = {
+                Text(
+                    if (isLastChapter) "您已阅读完本漫画的所有卷册。"
+                    else "下一卷：${nextChapterTitle ?: "未知"}"
+                )
+            },
+            confirmButton = {
+                if (!isLastChapter) {
+                    TextButton(onClick = {
+                        showChapterEndDialog = false
+                        viewModel.jumpToNextChapter()
+                    }) { Text("跳转下一卷") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChapterEndDialog = false }) {
+                    Text(if (isLastChapter) "确定" else "取消")
+                }
+            }
+        )
+    }
 
     // 退出阅读确认对话框
     if (showExitConfirm) {
@@ -157,6 +188,18 @@ fun ReaderScreen(
             }
         } else {
             window.insetsController?.show(WindowInsets.Type.systemBars())
+        }
+    }
+
+    // 卷末检测：当翻到最后一卷的最后一页时，弹出跳转对话框
+    LaunchedEffect(state.currentPage) {
+        if (state.settings.scrollMode == ScrollMode.PAGE &&
+            viewModel.pages.isNotEmpty() &&
+            state.currentPage >= viewModel.pages.size - 1) {
+            val (isLastChapter, nextIdx) = viewModel.checkChapterEnd()
+            if (isLastChapter || nextIdx != null) {
+                showChapterEndDialog = true
+            }
         }
     }
 
@@ -592,6 +635,8 @@ private fun PageViewer(
                     .random()
             }
         } else pageAnimation
+        // 用于稳定 AnimatedContent 的 key，避免动画状态混乱
+        val animationKey = remember(currentPage, effectiveAnimation) { currentPage to effectiveAnimation }
         when (effectiveAnimation) {
             com.mangareader.data.PageAnimation.NONE -> {
                 Box(
@@ -610,9 +655,9 @@ private fun PageViewer(
                 val slideDur = (220 / speed).toInt()
                 val fadeDur = (200 / speed).toInt()
                 AnimatedContent(
-                    targetState = currentPage,
+                    targetState = animationKey,
                     transitionSpec = {
-                        val forward = targetState > initialState
+                        val forward = targetState.first > initialState.first
                         val enter = if (rtl) {
                             slideInHorizontally(tween(slideDur)) { if (forward) -it else it } + fadeIn(tween(fadeDur))
                         } else {
@@ -635,7 +680,7 @@ private fun PageViewer(
                             translationY = offset.y
                         ),
                     label = "pageSlide"
-                ) { pageState -> renderPage(pageState) }
+                ) { pageState -> renderPage(pageState.first) }
             }
             com.mangareader.data.PageAnimation.CURL -> {
                 var currentBmp by remember { mutableStateOf<Bitmap?>(null) }
@@ -677,7 +722,7 @@ private fun PageViewer(
             com.mangareader.data.PageAnimation.FADE -> {
                 val fadeDur = (250 / pageAnimSpeed.coerceIn(0.2f, 3.0f)).toInt()
                 AnimatedContent(
-                    targetState = currentPage,
+                    targetState = animationKey,
                     transitionSpec = {
                         fadeIn(tween(fadeDur)) togetherWith fadeOut(tween(fadeDur))
                     },
@@ -691,13 +736,12 @@ private fun PageViewer(
                             translationY = offset.y
                         ),
                     label = "pageFade"
-                ) { pageState -> renderPage(pageState) }
+                ) { pageState -> renderPage(pageState.first) }
             }
             else -> {
-                // 像素/百叶窗/碎裂/网点等盲盒动效：先用淡入淡出兜底，避免 NoWhenBranchMatched 崩溃
                 val fallbackDur = (260 / pageAnimSpeed.coerceIn(0.2f, 3.0f)).toInt()
                 AnimatedContent(
-                    targetState = currentPage,
+                    targetState = animationKey,
                     transitionSpec = {
                         fadeIn(tween(fallbackDur)) togetherWith fadeOut(tween(fallbackDur))
                     },
@@ -711,7 +755,7 @@ private fun PageViewer(
                             translationY = offset.y
                         ),
                     label = "pageFallback"
-                ) { pageState -> renderPage(pageState) }
+                ) { pageState -> renderPage(pageState.first) }
             }
         }
 

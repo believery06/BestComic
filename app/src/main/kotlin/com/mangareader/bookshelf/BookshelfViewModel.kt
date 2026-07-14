@@ -308,7 +308,8 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
             .sortedWith { a, b -> FolderParser.compareNames(a.name, b.name) }
 
         if (type == ComicType.FOLDER) {
-            return children.firstOrNull { ParserFactory.isImageFile(it.name) }?.uri
+            val firstImage = children.firstOrNull { ParserFactory.isImageFile(it.name) }?.uri
+            return firstImage?.let { CoverExtractor.extractLocalImageThumbnail(getApplication(), it) }
         }
 
         if (type == ComicType.COMIC_BOOK) {

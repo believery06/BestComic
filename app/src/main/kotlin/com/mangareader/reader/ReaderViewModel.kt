@@ -41,7 +41,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
-    private var pages: List<ComicPage> = emptyList()
+    internal var pages: List<ComicPage> = emptyList()
     private var comicUri: Uri? = null
     private var bookmarks: List<Int> = emptyList()
     private var lastRecordedPage: Int = -1
@@ -216,11 +216,12 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         }
         val target = state.currentPage + step
 
+        // 如果已经是最后一页，触发卷末检测
         if (state.currentPage >= pages.size - 1) {
-            jumpToNextChapter()
-        } else {
-            setCurrentPage(target.coerceAtMost(pages.size - 1))
+            // 不再自动跳转，由 UI 层决定是否弹出卷末对话框
+            return
         }
+        setCurrentPage(target.coerceAtMost(pages.size - 1))
     }
 
     fun previousPage() {
@@ -255,6 +256,36 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 检测当前页是否为本卷最后一页，并返回下一卷信息。
+     * 返回 Pair<是否为最后一卷的最后一页, 下一卷第一页的索引>
+     */
+    fun checkChapterEnd(): Pair<Boolean, Int?> {
+        if (pages.isEmpty()) return Pair(false, null)
+        val currentPage = _uiState.value.currentPage
+        val currentChapter = pages.getOrNull(currentPage)?.chapterTitle ?: ""
+        
+        // 找到当前卷的最后一页
+        var lastPageOfCurrentChapter = currentPage
+        while (lastPageOfCurrentChapter + 1 < pages.size && 
+               pages[lastPageOfCurrentChapter + 1].chapterTitle == currentChapter) {
+            lastPageOfCurrentChapter++
+        }
+        
+        // 如果当前页不是本卷最后一页，则不需要跳转
+        if (currentPage < lastPageOfCurrentChapter) return Pair(false, null)
+        
+        // 查找下一卷
+        for (i in (lastPageOfCurrentChapter + 1) until pages.size) {
+            if (pages[i].chapterTitle.isNotEmpty() && pages[i].chapterTitle != currentChapter) {
+                return Pair(false, i)
+            }
+        }
+        
+        // 没有下一卷
+        return Pair(true, null)
+    }
+
+    /**
      * 跳转到下一章节的第一页（基于 chapterTitle 边界）。
      */
     fun jumpToNextChapter() {
@@ -270,8 +301,28 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 跳转到上一章节的最后一页。
+     * 获取下一卷的标题（用于对话框显示）。
      */
+    fun getNextChapterTitle(): String? {
+        if (pages.isEmpty()) return null
+        val currentPage = _uiState.value.currentPage
+        val currentChapter = pages.getOrNull(currentPage)?.chapterTitle ?: ""
+        
+        // 找到当前卷的最后一页
+        var lastPageOfCurrentChapter = currentPage
+        while (lastPageOfCurrentChapter + 1 < pages.size && 
+               pages[lastPageOfCurrentChapter + 1].chapterTitle == currentChapter) {
+            lastPageOfCurrentChapter++
+        }
+        
+        // 查找下一卷
+        for (i in (lastPageOfCurrentChapter + 1) until pages.size) {
+            if (pages[i].chapterTitle.isNotEmpty() && pages[i].chapterTitle != currentChapter) {
+                return pages[i].chapterTitle
+            }
+        }
+        return null
+    }
     fun jumpToPrevChapter() {
         if (pages.isEmpty()) return
         val currentChapter = pages.getOrNull(_uiState.value.currentPage)?.chapterTitle ?: return
