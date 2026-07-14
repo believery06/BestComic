@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -279,7 +281,8 @@ fun BookshelfScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -308,11 +311,14 @@ fun BookshelfScreen(
                     onClick = { filter = BookshelfFilter.READ },
                     label = { Text("已读") }
                 )
-                Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = {
                     sortBy = if (sortBy == BookshelfSort.NAME) BookshelfSort.RECENT else BookshelfSort.NAME
                 }) {
-                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "排序")
+                    Icon(
+                        Icons.AutoMirrored.Filled.Sort,
+                        contentDescription = if (sortBy == BookshelfSort.NAME) "按名称排序" else "按最近阅读排序",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
             // 分类筛选行

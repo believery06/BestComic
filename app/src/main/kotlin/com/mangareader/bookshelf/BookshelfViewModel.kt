@@ -274,7 +274,26 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
         coverJob = viewModelScope.launch(Dispatchers.IO) {
             val updated = comics.toMutableList()
 
-            ParallelCoverExtractor.extractCoversParallel(app, needExtraction) { entry, coverUri ->
+            // 分离目录类型和非目录类型
+            val directoryComics = needExtraction.filter { it.isDirectory }
+            val fileComics = needExtraction.filter { !it.isDirectory }
+
+            // 处理非目录类型（CBZ, CBR, CB7, CBT, PDF, EPUB）
+            ParallelCoverExtractor.extractCoversParallel(app, fileComics) { entry, coverUri ->
+                if (coverUri != null) {
+                    synchronized(updated) {
+                        val idx = updated.indexOfFirst { it.uri == entry.uri }
+                        if (idx >= 0) {
+                            updated[idx] = updated[idx].copy(coverUri = coverUri)
+                            _uiState.value = _uiState.value.copy(comics = updated.toList())
+                        }
+                    }
+                }
+            }
+
+            // 处理目录类型（FOLDER, COMIC_BOOK）- 使用 findCover
+            for (entry in directoryComics) {
+                val coverUri = findCover(entry.uri, entry.type)
                 if (coverUri != null) {
                     synchronized(updated) {
                         val idx = updated.indexOfFirst { it.uri == entry.uri }
