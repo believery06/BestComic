@@ -28,11 +28,11 @@ fun PageCurlView(
     onFlipCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var dragProgress by remember { mutableFloatStateOf(0f) }
     var targetProgress by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     var isAnimating by remember { mutableStateOf(false) }
-    var dragDirection by remember { mutableIntStateOf(direction) }
+    var flipDirection by remember { mutableIntStateOf(direction) }
+    var dragProgress by remember { mutableFloatStateOf(0f) }
 
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
@@ -49,12 +49,12 @@ fun PageCurlView(
 
     val displayProgress = when {
         isDragging -> dragProgress
-        else -> animatedProgress * dragDirection
+        else -> animatedProgress * flipDirection
     }
 
     LaunchedEffect(triggerKey) {
         if (triggerKey > 0 && !isDragging) {
-            dragDirection = direction
+            flipDirection = direction
             isAnimating = true
             targetProgress = 1f
         }
@@ -69,20 +69,16 @@ fun PageCurlView(
                         if (!isAnimating) {
                             isDragging = true
                             dragProgress = 0f
-                            dragDirection = direction
+                            flipDirection = direction
                         }
                     },
                     onDragEnd = {
                         if (isDragging) {
                             isDragging = false
                             isAnimating = true
-                            if (abs(dragProgress) > 0.3f) {
-                                dragDirection = if (dragProgress > 0) 1 else -1
-                                targetProgress = 1f
-                            } else {
-                                targetProgress = 0f
-                                onFlipCancel()
-                            }
+                            flipDirection = if (dragProgress > 0) 1 else -1
+                            targetProgress = if (abs(dragProgress) > 0.3f) 1f else 0f
+                            if (abs(dragProgress) <= 0.3f) onFlipCancel()
                         }
                     },
                     onDragCancel = {
