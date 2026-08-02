@@ -13,6 +13,7 @@ object ParserFactory {
             ComicType.CBT -> CbtParser()
             ComicType.EPUB -> EpubParser()
             ComicType.PDF -> PdfParser()
+            ComicType.MOBI -> MobiParser()
             ComicType.FOLDER -> FolderParser()
             ComicType.COMIC_BOOK -> ComicBookParser()
             else -> null
@@ -28,16 +29,13 @@ object ParserFactory {
             lower.endsWith(".cbt") || lower.endsWith(".tar") -> ComicType.CBT
             lower.endsWith(".epub") -> ComicType.EPUB
             lower.endsWith(".pdf") -> ComicType.PDF
+            lower.endsWith(".mobi") || lower.endsWith(".azw") || lower.endsWith(".azw3") -> ComicType.MOBI
             lower.endsWith(".djvu") || lower.endsWith(".djv") -> ComicType.UNKNOWN // Not yet supported
             lower.endsWith(".xps") || lower.endsWith(".oxps") -> ComicType.UNKNOWN // Not yet supported
             else -> ComicType.UNKNOWN
         }
     }
 
-    fun isImageFile(name: String): Boolean {
-        val lower = name.lowercase()
-        val imageExtensions = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "bmp", "avif")
-        return imageExtensions.any { lower.endsWith(".$it") }
-    }
+    fun isImageFile(name: String): Boolean = com.mangareader.utils.isImageFile(name)
 }
 

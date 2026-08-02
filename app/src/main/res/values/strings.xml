@@ -1,4 +1,823 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">最佳漫画</string>
+
+    <!-- 阅读目标通知 -->
+    <string name="notification_channel_reading_goals">阅读目标</string>
+    <string name="notification_channel_reading_goals_desc">每日阅读目标达成提醒</string>
+
+    <!-- 阅读目标通知 -->
+    <string name="notification_goal_title">恭喜完成今日阅读目标</string>
+    <string name="notification_goal_content">今日阅读目标达成：%1$s</string>
+
+    <!-- WebDAV 同步通知 -->
+    <string name="notification_channel_sync">同步状态</string>
+    <string name="notification_channel_sync_desc">WebDAV 等后台同步任务的状态提示</string>
+    <string name="notification_sync_error_title">同步失败</string>
+    <string name="webdav_sync_auth_error">WebDAV 认证失败，请检查账号或密码</string>
+
+    <!-- 阅读目标达成 -->
+    <string name="reader_goal_toast_title">恭喜完成今日阅读目标</string>
+    <string name="reader_goal_toast_with_parts">恭喜完成今日阅读目标：%1$s</string>
+    <string name="reader_goal_pages_format">%1$d/%2$d 页</string>
+    <string name="reader_goal_minutes_format">%1$d/%2$d 分钟</string>
+
+    <!-- 通用操作 -->
+    <string name="list_separator">、</string>
+    <string name="action_ok">确定</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_close">关闭</string>
+    <string name="action_save">保存</string>
+    <string name="action_delete">删除</string>
+    <string name="action_clear">清空</string>
+    <string name="action_search">搜索</string>
+    <string name="action_back">返回</string>
+    <string name="action_copy">复制</string>
+    <!-- 阅读器对话框 -->
+    <string name="reader_invalid_comic">无法打开漫画：地址无效</string>
+    <string name="reader_tts_init_failed">TTS 引擎初始化失败，请检查系统语音设置</string>
+    <string name="reader_exit_title">退出阅读</string>
+    <string name="reader_exit_message">确定要退出当前漫画吗？阅读进度已自动保存。</string>
+    <string name="reader_exit_confirm">退出</string>
+    <string name="reader_exit_cancel">取消</string>
+    <string name="reader_exit_dont_ask_again">不再询问，直接退出</string>
+    <string name="reader_chapter_end_last_title">已是最后一卷</string>
+    <string name="reader_chapter_end_done_title">本卷已读完</string>
+    <string name="reader_chapter_end_last_message">您已阅读完本漫画的所有卷册。</string>
+    <string name="reader_chapter_end_next">下一卷：%1$s</string>
+    <string name="reader_chapter_end_next_unknown">未知</string>
+    <string name="reader_chapter_end_jump">跳转下一卷</string>
+    <string name="reader_chapter_end_confirm">确定</string>
+    <string name="reader_chapter_end_cancel">取消</string>
+
+    <!-- 阅读历史 -->
+    <string name="history_title">阅读历史</string>
+    <string name="history_search_hint">搜索历史漫画</string>
+    <string name="history_empty_title">暂无阅读历史</string>
+    <string name="history_empty_subtitle">打开任意漫画后会自动记录在这里</string>
+    <string name="history_no_match_title">未找到匹配的历史记录</string>
+    <string name="history_no_match_subtitle">尝试更换关键词</string>
+    <string name="history_clear_confirm">确定清空全部阅读历史？此操作不可恢复。</string>
+    <string name="history_remove">删除</string>
+    <string name="history_cover_desc">%1$s 封面</string>
+    <string name="history_time_never">从未</string>
+    <string name="history_time_just_now">刚刚</string>
+    <string name="history_time_minutes_ago">%1$d分钟前</string>
+    <string name="history_time_hours_ago">%1$d小时前</string>
+    <string name="history_time_date_format">MM-dd HH:mm</string>
+    <string name="history_group_today">今天</string>
+    <string name="history_group_yesterday">昨天</string>
+    <string name="history_group_this_week">本周</string>
+    <string name="history_group_this_month">本月</string>
+    <string name="history_group_earlier">更早</string>
+    <string name="history_share_title">分享阅读历史</string>
+    <string name="history_share_chooser">分享阅读历史</string>
+    <string name="history_share_subject">我的阅读历史</string>
+    <string name="history_share_header">我的阅读历史</string>
+    <string name="history_share_count">共 %1$d 条记录</string>
+    <string name="history_share_progress">进度：%1$s</string>
+    <string name="history_share_time">时间：%1$s</string>
+
+    <!-- 崩溃日志对话框 -->
+    <string name="bookshelf_empty_title">还没有漫画哦</string>
+    <string name="bookshelf_empty_subtitle">选择一个文件夹作为书架，里面的漫画就会出现在这里</string>
+    <string name="bookshelf_empty_folder_title">这个文件夹是空的</string>
+    <string name="bookshelf_empty_folder_subtitle">返回上级书架或选择其他目录</string>
+    <string name="bookshelf_no_search_match">未找到匹配的漫画</string>
+    <string name="bookshelf_search_hint_subtitle">换个关键词试试，或清除搜索条件</string>
+    <string name="bookshelf_no_filter_match">没有符合条件的漫画</string>
+    <string name="bookshelf_filter_hint_subtitle">调整筛选条件看看吧</string>
+    <string name="bookshelf_add_directory">添加书架目录</string>
+    <string name="bookshelf_clear_filters">清除条件</string>
+    <string name="bookshelf_search_hint">搜索漫画名称</string>
+    <string name="bookshelf_search_history">搜索历史</string>
+    <string name="bookshelf_search_history_clear">清空历史</string>
+    <string name="bookshelf_search_history_empty">暂无搜索历史</string>
+    <string name="bookshelf_browser">浏览器</string>
+    <string name="bookshelf_read_history">阅读历史</string>
+    <string name="bookshelf_help">使用说明</string>
+    <string name="bookshelf_more_options">更多选项</string>
+    <string name="bookshelf_switch_list_view">切换列表视图</string>
+    <string name="bookshelf_switch_grid_view">切换网格视图</string>
+    <string name="bookshelf_all">全部</string>
+    <string name="bookshelf_favorites">收藏</string>
+    <string name="bookshelf_unread">未读</string>
+    <string name="bookshelf_reading">阅读中</string>
+    <string name="bookshelf_read">已读</string>
+    <string name="bookshelf_new_added">新加入</string>
+    <string name="bookshelf_new_added_count">新加入 (%1$d)</string>
+    <string name="bookshelf_sort_by_name">按名称排序</string>
+    <string name="bookshelf_sort_by_recent">按最近阅读排序</string>
+    <string name="bookshelf_sort_by_progress">按阅读进度排序</string>
+    <string name="bookshelf_scan_just_now">刚刚更新</string>
+    <string name="bookshelf_scan_minutes_ago">%1$d 分钟前更新</string>
+    <string name="bookshelf_scan_hours_ago">%1$d 小时前更新</string>
+    <string name="bookshelf_scan_days_ago">%1$d 天前更新</string>
+    <string name="bookshelf_scan_date_format">MM-dd</string>
+    <string name="bookshelf_scan_date_suffix">更新</string>
+
+    <!-- 设置页面 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_group_reading">阅读设置</string>
+    <string name="settings_group_image">图像设置</string>
+    <string name="settings_group_gesture">手势与按键</string>
+    <string name="settings_group_tts">文字朗读</string>
+    <string name="settings_group_goals">阅读目标</string>
+    <string name="settings_group_appearance">外观主题</string>
+    <string name="settings_group_library">书库设置</string>
+    <string name="settings_group_about">关于</string>
+
+    <string name="settings_scroll_mode">翻页方式</string>
+    <string name="settings_scroll_mode_desc">页模式适合普通漫画，垂直/水平滚动适合条漫</string>
+    <string name="settings_rtl">从右向左翻页（日漫模式）</string>
+    <string name="settings_rtl_desc">日漫默认从右向左阅读</string>
+    <string name="settings_dual_page">双页模式</string>
+    <string name="settings_dual_page_desc">横屏时并排显示两页</string>
+    <string name="settings_auto_dual_page">横屏自动双页</string>
+    <string name="settings_auto_dual_page_desc">检测到横屏时自动切换为双页布局</string>
+    <string name="settings_dual_page_start_one">双页 1+2 起始</string>
+    <string name="settings_dual_page_start_one_desc">关闭时封面单独显示一页</string>
+    <string name="settings_dual_page_spacing">双页间距 (%1$ddp)</string>
+    <string name="settings_page_shadow">分页阴影</string>
+    <string name="settings_page_shadow_desc">在双页间距处显示书脊阴影，消除中间黑缝</string>
+    <string name="settings_volume_key_nav">音量键翻页</string>
+    <string name="settings_volume_key_nav_desc">音量上=上一页，音量下=下一页</string>
+    <string name="settings_page_animation">翻页动画</string>
+    <string name="settings_page_animation_desc">推荐「滑动」或「淡入淡出」，「翻页」更耗电</string>
+    <string name="settings_orientation_lock">屏幕方向</string>
+    <string name="settings_orientation_lock_desc">阅读界面方向锁定策略</string>
+    <string name="settings_tap_zone_size">点击翻页区域大小</string>
+    <string name="settings_tap_zone_size_desc">小区域：中间菜单区更大；大区域：翻页热区更大</string>
+    <string name="settings_auto_brightness">自动亮度</string>
+    <string name="settings_auto_brightness_desc">根据环境光线自动调整阅读亮度</string>
+    <string name="settings_anti_mistouch">防误触模式</string>
+    <string name="settings_anti_mistouch_desc">开启后单指点击不再翻页或呼出菜单，仅响应双击/长按手势</string>
+    <string name="settings_reader_status_bar">阅读页状态栏信息</string>
+    <string name="settings_reader_status_bar_desc">在画面顶部显示页码、章节、电量与时间</string>
+    <string name="settings_thumbnail_strip">底部缩略图进度条</string>
+    <string name="settings_thumbnail_strip_desc">在阅读界面底部显示可点击的页面缩略图条</string>
+    <string name="settings_keep_screen_on">阅读时保持屏幕常亮</string>
+    <string name="settings_keep_screen_on_desc">开启后在阅读界面不会自动息屏</string>
+
+    <string name="settings_zoom_mode">缩放模式</string>
+    <string name="settings_zoom_mode_desc">自由缩放支持双指捏合</string>
+    <string name="settings_scale_filter">缩放算法</string>
+    <string name="settings_scale_filter_desc">高质量锐利缩放画质最好但更耗电，双线性缩放速度最快</string>
+    <string name="settings_auto_crop">自动裁白边</string>
+    <string name="settings_auto_crop_desc">自动识别并切除扫描版漫画的白边</string>
+    <string name="settings_crop_margin_top">上边距 %1$d%%</string>
+    <string name="settings_crop_margin_bottom">下边距 %1$d%%</string>
+    <string name="settings_crop_margin_left">左边距 %1$d%%</string>
+    <string name="settings_crop_margin_right">右边距 %1$d%%</string>
+    <string name="settings_grayscale">灰度</string>
+    <string name="settings_grayscale_desc">将画面转为黑白</string>
+    <string name="settings_sharpen">锐化</string>
+    <string name="settings_sharpen_desc">增强线条边缘</string>
+    <string name="settings_denoise">降噪</string>
+    <string name="settings_denoise_desc">减少扫描颗粒感</string>
+    <string name="settings_mirror">镜像</string>
+    <string name="settings_mirror_desc">水平翻转画面</string>
+    <string name="settings_night_mode">夜间模式</string>
+    <string name="settings_night_mode_desc">降低画面亮度，适合暗光环境阅读</string>
+    <string name="settings_eye_care">护眼模式</string>
+    <string name="settings_eye_care_desc">减少蓝光，使用更柔和的暖色画面</string>
+    <string name="settings_rotate_image">旋转画面</string>
+    <string name="settings_rotate_image_desc">每次顺时针旋转 90°</string>
+    <string name="settings_rotation_degrees">%1$d°</string>
+    <string name="settings_brightness">亮度</string>
+    <string name="settings_contrast">对比度</string>
+    <string name="settings_gamma">伽马</string>
+    <string name="settings_saturation">饱和度</string>
+    <string name="settings_reset_filters">重置所有滤镜</string>
+    <string name="settings_reset_filters_desc">恢复亮度、颜色、旋转、裁边及全部图像效果</string>
+    <string name="settings_filters_reset_toast">所有滤镜已重置</string>
+    <string name="settings_reset_reader">恢复阅读默认设置</string>
+    <string name="settings_reset_reader_desc">重置翻页方式、缩放、手势、亮度等阅读相关选项</string>
+    <string name="settings_reset_reader_toast">阅读设置已恢复默认</string>
+    <string name="settings_reset_image">恢复图像默认设置</string>
+    <string name="settings_reset_image_desc">重置滤镜、裁边、缩放算法等图像相关选项</string>
+    <string name="settings_reset_image_toast">图像设置已恢复默认</string>
+    <string name="settings_reset_gesture">恢复手势默认设置</string>
+    <string name="settings_reset_gesture_desc">恢复为当前阅读方向（日漫/国漫）的默认手势</string>
+    <string name="settings_reset_gesture_toast">手势设置已恢复默认</string>
+
+    <string name="settings_enable_zoom">启用缩放</string>
+    <string name="settings_enable_zoom_desc">双指缩放与双击缩放</string>
+    <string name="settings_magnifier">放大镜</string>
+    <string name="settings_magnifier_desc">长按屏幕局部放大</string>
+    <string name="settings_custom_gestures">自定义手势</string>
+    <string name="settings_custom_gestures_desc">配置点击/滑动区域对应动作</string>
+
+    <string name="settings_tts_enable">启用 TTS 朗读</string>
+    <string name="settings_tts_enable_desc">支持 EPUB 文字漫画自动翻页朗读</string>
+    <string name="settings_tts_speed">语速</string>
+    <string name="settings_tts_pitch">音调</string>
+
+    <string name="settings_goals_hint">设置每日阅读目标，0 表示不开启</string>
+    <string name="settings_goals_daily_pages">每日页数</string>
+    <string name="settings_goals_daily_minutes">每日分钟</string>
+    <string name="settings_goals_saved_toast">阅读目标已保存</string>
+
+    <string name="settings_theme_skin">主题皮肤</string>
+    <string name="settings_theme_auto">主题自动切换</string>
+    <string name="settings_theme_auto_desc">跟随系统或按时间段自动切换日/夜配色</string>
+    <string name="settings_custom_theme_color">自定义主题色 (RGB)</string>
+    <string name="settings_custom_color_red">R</string>
+    <string name="settings_custom_color_green">G</string>
+    <string name="settings_custom_color_blue">B</string>
+
+    <string name="settings_cache_management">缓存管理</string>
+    <string name="settings_cache_size_desc">当前缓存：%1$s</string>
+    <string name="settings_statistics">阅读统计</string>
+    <string name="settings_statistics_desc">查看阅读时长、页数与连续天数</string>
+    <string name="settings_export_backup">导出备份</string>
+    <string name="settings_export_backup_desc">将进度、书签、收藏、分类、书单等导出为 JSON 文件</string>
+    <string name="settings_import_backup">从备份恢复</string>
+    <string name="settings_import_backup_desc">选择备份文件，与本地数据合并（进度取最大值）</string>
+    <string name="settings_clear_cache">清除全部缓存</string>
+    <string name="settings_clear_cache_desc">清理页面、封面、临时文件，不会删除书签与收藏</string>
+    <string name="settings_cache_cleared_toast">缓存已清除</string>
+
+    <string name="settings_export_crash_logs">导出崩溃日志</string>
+    <string name="settings_export_crash_logs_desc">将最近的异常日志导出为文本文件分享</string>
+    <string name="settings_version">版本</string>
+    <string name="settings_version_unknown">未知</string>
+    <string name="settings_contact_author">联系作者</string>
+    <string name="settings_contact_copied_toast">已复制</string>
+    <string name="settings_open_source_notice">开源声明</string>
+    <string name="settings_open_source_desc">本项目使用 Jetpack Compose、Coil、junrar 等开源库</string>
+
+    <string name="settings_backup_saved_toast">备份已保存</string>
+    <string name="settings_backup_failed_toast">备份失败：%1$s</string>
+    <string name="settings_restore_success_toast">恢复成功</string>
+    <string name="settings_restore_failed_parse_toast">备份文件解析失败</string>
+    <string name="settings_restore_failed_toast">恢复失败：%1$s</string>
+    <string name="settings_restore_too_large_toast">备份文件过大（上限 %1$dMB），请拆分或精简数据</string>
+    <string name="settings_crash_logs_empty_toast">暂无崩溃日志</string>
+    <string name="settings_crash_logs_export_subject">崩溃日志</string>
+    <string name="settings_crash_logs_export_chooser">导出崩溃日志</string>
+    <string name="settings_crash_logs_export_failed_toast">导出失败：%1$s</string>
+
+    <!-- 设置枚举值 -->
+    <string name="scroll_mode_page">单页或双页</string>
+    <string name="scroll_mode_vertical">垂直滚动</string>
+    <string name="scroll_mode_horizontal">水平滚动</string>
+
+    <string name="zoom_mode_free">自由缩放</string>
+    <string name="zoom_mode_fit_width">适合宽度</string>
+    <string name="zoom_mode_fit_height">适合高度</string>
+    <string name="zoom_mode_fit_screen">适合屏幕</string>
+
+    <string name="page_animation_none">无动画</string>
+    <string name="page_animation_slide">滑动</string>
+    <string name="page_animation_fade">淡入淡出</string>
+    <string name="page_animation_pixel">像素渐变</string>
+    <string name="page_animation_blinds">百叶窗</string>
+    <string name="page_animation_shatter">碎裂</string>
+    <string name="page_animation_dots">漫画网点</string>
+
+    <string name="tap_zone_size_small">小</string>
+    <string name="tap_zone_size_medium">中</string>
+    <string name="tap_zone_size_large">大</string>
+
+    <string name="scale_filter_bilinear">双线性（快速）</string>
+    <string name="scale_filter_bicubic">双三次（平滑）</string>
+    <string name="scale_filter_lanczos3">高质量锐利缩放</string>
+
+    <string name="theme_auto_off">关闭</string>
+    <string name="theme_auto_follow_system">跟随系统</string>
+    <string name="theme_auto_schedule">定时切换（22:00–06:00 深色）</string>
+
+    <string name="orientation_lock_follow_system">跟随系统</string>
+    <string name="orientation_lock_portrait">竖屏锁定</string>
+    <string name="orientation_lock_landscape">横屏锁定</string>
+    <string name="orientation_lock_auto_rotate">自动旋转</string>
+
+    <!-- 缓存管理 -->
+    <string name="cache_management_title">缓存管理</string>
+    <string name="cache_usage_title">缓存占用</string>
+    <string name="cache_page_cache">页面缓存</string>
+    <string name="cache_page_cache_desc">已渲染的漫画页面，清理后再次阅读需重新渲染</string>
+    <string name="cache_thumb_cache">封面缩略图</string>
+    <string name="cache_thumb_cache_desc">书架与历史页面的封面图，清理后需重新提取</string>
+    <string name="cache_share_card">分享卡片</string>
+    <string name="cache_share_card_desc">分享漫画时生成的临时图片</string>
+    <string name="cache_parser_temp">解析临时文件</string>
+    <string name="cache_parser_temp_desc">解压/解析漫画时产生的临时文件</string>
+    <string name="cache_clear">清理</string>
+    <string name="cache_clear_all">清理全部缓存 (%1$s)</string>
+    <string name="cache_size_format_b">%1$d B</string>
+    <string name="cache_size_format_kb">%.1f KB</string>
+    <string name="cache_size_format_mb">%.1f MB</string>
+    <string name="cache_size_format_gb">%.1f GB</string>
+
+    <!-- 手势设置 -->
+    <string name="gesture_settings_title">手势自定义</string>
+    <string name="gesture_save">保存</string>
+    <string name="gesture_save_failed">手势保存失败，请重试</string>
+    <string name="gesture_presets">快速预设</string>
+    <string name="gesture_preset_manga">日漫模式</string>
+    <string name="gesture_preset_comic">国漫模式</string>
+    <string name="gesture_preset_simple">简洁模式</string>
+    <string name="gesture_tap_areas">点击区域</string>
+    <string name="gesture_swipe_gestures">滑动手势</string>
+    <string name="gesture_other_gestures">其他手势</string>
+    <string name="gesture_tap_left">左半屏</string>
+    <string name="gesture_tap_right">右半屏</string>
+    <string name="gesture_tap_center">中间区域</string>
+    <string name="gesture_tap_top">顶部区域</string>
+    <string name="gesture_tap_bottom">底部区域</string>
+    <string name="gesture_swipe_left">左滑</string>
+    <string name="gesture_swipe_right">右滑</string>
+    <string name="gesture_swipe_up">上滑</string>
+    <string name="gesture_swipe_down">下滑</string>
+    <string name="gesture_double_tap">双击</string>
+    <string name="gesture_long_press">长按</string>
+
+    <string name="gesture_action_nothing">无操作</string>
+    <string name="gesture_action_prev_page">上一页</string>
+    <string name="gesture_action_next_page">下一页</string>
+    <string name="gesture_action_toggle_menu">切换菜单</string>
+    <string name="gesture_action_zoom_toggle">切换缩放</string>
+    <string name="gesture_action_magnifier">放大镜</string>
+    <string name="gesture_action_auto_crop_toggle">切换裁边</string>
+    <string name="gesture_action_brightness_up">亮度增加</string>
+    <string name="gesture_action_brightness_down">亮度降低</string>
+    <string name="gesture_action_next_chapter">下一章</string>
+    <string name="gesture_action_prev_chapter">上一章</string>
+    <string name="gesture_action_rotate">旋转</string>
+    <string name="gesture_action_slideshow_toggle">幻灯片</string>
+    <string name="gesture_action_panel_view">分镜模式</string>
+    <string name="gesture_action_bookmark">添加书签</string>
+    <string name="gesture_action_back">返回</string>
+
+    <!-- 阅读统计 -->
+    <string name="statistics_title">阅读统计</string>
+    <string name="statistics_total_pages">累计阅读页数</string>
+    <string name="statistics_total_pages_value">%1$d 页</string>
+    <string name="statistics_comics_finished">读完漫画</string>
+    <string name="statistics_comics_finished_value">%1$d 本</string>
+    <string name="statistics_streak_days">连续阅读天数</string>
+    <string name="statistics_streak_days_value">%1$d 天</string>
+    <string name="statistics_today_minutes">今日阅读时长</string>
+    <string name="statistics_today_minutes_value">%1$d 分钟</string>
+    <string name="statistics_today_pages">今日阅读页数</string>
+    <string name="statistics_today_pages_value">%1$d 页</string>
+    <string name="statistics_today_goals">今日目标</string>
+    <string name="statistics_goal_pages_label">页数</string>
+    <string name="statistics_goal_minutes_label">时长</string>
+    <string name="statistics_goal_progress">%1$d / %2$d</string>
+    <string name="statistics_daily_minutes_title">每日时长（最近 14 天）</string>
+    <string name="statistics_no_data">暂无数据</string>
+    <string name="statistics_minutes_value">%1$d 分</string>
+    <string name="statistics_weekly_trend_title">每周时长趋势（最近 8 周）</string>
+    <string name="statistics_week_value">本周 %1$d 分钟</string>
+    <string name="statistics_weekly_chart_max_label">%1$dm</string>
+    <string name="statistics_monthly_title">每月时长（最近 12 个月）</string>
+    <string name="statistics_goal_trend_title">近 14 天目标达成趋势</string>
+    <string name="statistics_total_minutes">累计阅读时长</string>
+    <string name="statistics_total_minutes_value">%1$d 分钟</string>
+    <string name="statistics_avg_pages_per_hour">平均阅读速度</string>
+    <string name="statistics_avg_pages_per_hour_value">%1$d 页/小时</string>
+    <string name="statistics_avg_minutes_per_day">日均阅读时长</string>
+    <string name="statistics_avg_minutes_per_day_value">%1$d 分钟</string>
+
+    <!-- 阅读统计分享 -->
+    <string name="statistics_share_title">分享阅读统计</string>
+    <string name="statistics_share_chooser">分享阅读统计</string>
+    <string name="statistics_share_subject">我的阅读统计</string>
+    <string name="statistics_share_header">我的阅读统计</string>
+    <string name="statistics_share_total_pages">累计阅读页数：%1$d 页</string>
+    <string name="statistics_share_comics_finished">读完漫画：%1$d 本</string>
+    <string name="statistics_share_streak_days">连续阅读天数：%1$d 天</string>
+    <string name="statistics_share_today_minutes">今日阅读时长：%1$d 分钟</string>
+    <string name="statistics_share_today_pages">今日阅读页数：%1$d 页</string>
+    <string name="statistics_share_total_minutes">累计阅读时长：%1$d 分钟</string>
+    <string name="statistics_share_avg_speed">平均阅读速度：%1$d 页/小时</string>
+    <string name="statistics_share_avg_daily">日均阅读时长：%1$d 分钟</string>
+    <string name="statistics_share_goal_pages">今日页数目标：%1$d / %2$d 页</string>
+    <string name="statistics_share_goal_minutes">今日时长目标：%1$d / %2$d 分钟</string>
+
+    <!-- 崩溃日志对话框 -->
+    <string name="crash_log_title">上次使用中出现异常退出</string>
+    <string name="crash_log_message">检测到以下异常日志，可能有助于排查问题：</string>
+    <string name="crash_log_suggestion">建议重启应用。如问题持续出现，请联系作者反馈。</string>
+    <string name="crash_log_copy">复制日志</string>
+    <string name="crash_log_export">导出日志</string>
+    <string name="crash_log_copied_toast">已复制到剪贴板</string>
+    <string name="crash_log_export_subject">崩溃日志</string>
+    <string name="crash_log_export_chooser">导出崩溃日志</string>
+    <string name="crash_log_export_failed_toast">导出失败：%1$s</string>
+
+    <!-- GitHub Star 对话框 -->
+    <string name="github_star_title">给项目一个 Star</string>
+    <string name="github_star_message">如果您觉得这个应用有用，欢迎前往 GitHub 查看源代码，并给项目点一个 Star ⭐ 支持开发！</string>
+    <string name="github_star_copy">复制链接</string>
+    <string name="github_star_copy_copied_toast">已复制链接</string>
+    <string name="github_star_open">前往 Star</string>
+
+    <!-- 打赏对话框 -->
+    <string name="donation_title">打赏功能</string>
+    <string name="donation_message">打赏功能暂未开通。</string>
+    <string name="donation_thanks">感谢您的支持，请期待后续更新。</string>
+
+    <!-- 分卷浏览 -->
+    <string name="chapter_browser_no_pages_error">没有可识别的页面</string>
+    <string name="chapter_browser_parse_error">解析失败：%1$s</string>
+    <string name="chapter_browser_whole_volume">全篇</string>
+    <string name="chapter_browser_unnamed">未命名</string>
+
+    <!-- 阅读器 -->
+    <string name="reader_no_pages_error">该文件没有可显示的页面</string>
+    <string name="reader_unsupported_format">不支持的格式</string>
+    <string name="reader_share_card_page_label">第 %1$d 页</string>
+
+    <!-- 书架 ViewModel -->
+    <string name="bookshelf_unknown_error">未知错误</string>
+    <string name="bookshelf_current_directory">当前目录</string>
+
+    <!-- 外部 Intent -->
+    <string name="external_intent_default_title">漫画</string>
+    <string name="external_intent_unknown_type_toast">无法识别该文件类型，请选择 CBZ/CBR/CB7/CBT/EPUB/PDF/MOBI 格式的漫画文件</string>
+
+    <!-- 引导页 -->
+    <string name="onboarding_permission_title">授予文件访问权限</string>
+    <string name="onboarding_permission_saf_message">Android 11+ 使用系统文件选择器授权访问书架目录，无需授予「管理所有文件」权限。</string>
+    <string name="onboarding_permission_saf_hint">点击下方按钮选择书架文件夹，应用将只访问该目录及其子目录。</string>
+    <string name="onboarding_permission_storage_message">需要存储权限以浏览本地漫画文件。</string>
+    <string name="onboarding_permission_storage_hint">点击下方按钮请求权限；若被拒绝，可前往系统设置手动开启。</string>
+    <string name="onboarding_permission_select_bookshelf">选择书架目录</string>
+    <string name="onboarding_permission_request">请求权限</string>
+    <string name="onboarding_permission_go_settings">去设置</string>
+    <string name="onboarding_permission_later">稍后</string>
+
+    <string name="onboarding_help_title">使用说明</string>
+    <string name="onboarding_help_close">关闭</string>
+    <string name="onboarding_help_full_help">查看完整说明</string>
+    <string name="onboarding_help_dont_show">不再显示</string>
+    <string name="onboarding_help_reset">重置引导</string>
+
+    <string name="onboarding_help_section_bookshelf">1. 书架</string>
+    <string name="onboarding_help_bookshelf_1">• 首次进入后，点击右上角 + 选择一个文件夹作为书架目录</string>
+    <string name="onboarding_help_bookshelf_2">• 根目录下的每个子文件夹会被视作一本漫画</string>
+    <string name="onboarding_help_bookshelf_3">• 子文件夹内的多个 PDF / EPUB / CBZ 等按名称自然排序作为章节</string>
+    <string name="onboarding_help_bookshelf_4">• 长按漫画卡片可标记为收藏</string>
+
+    <string name="onboarding_help_section_reading">2. 阅读</string>
+    <string name="onboarding_help_reading_1">• 点击屏幕中央唤出/关闭菜单</string>
+    <string name="onboarding_help_reading_2">• 点击屏幕左/右区域翻页（RTL 日漫模式下方向相反）</string>
+    <string name="onboarding_help_reading_3">• 双指捏合可自由缩放（仅在「自由缩放」模式下）</string>
+    <string name="onboarding_help_reading_4">• 平板/横屏下，菜单会自动变成左右两侧栏，方便预览中间内容</string>
+    <string name="onboarding_help_reading_5">• 屏幕左边缘向右滑动可返回上一级</string>
+
+    <string name="onboarding_help_section_mode">3. 阅读模式</string>
+    <string name="onboarding_help_mode_1">• 页模式：默认翻页模式，可切换单页 / 双页 / 日漫 RTL</string>
+    <string name="onboarding_help_mode_2">• 垂直滚动：适合韩式条漫、国产条漫</string>
+    <string name="onboarding_help_mode_3">• 水平滚动：长条横向漫画</string>
+
+    <string name="onboarding_help_section_image">4. 画面优化</string>
+    <string name="onboarding_help_image_1">• 裁白边：扫描类漫画自动切除多余白边</string>
+    <string name="onboarding_help_image_2">• 亮度 / 对比 / 伽马：调整图像观感</string>
+    <string name="onboarding_help_image_3">• 黑白 / 锐化：改善老旧扫描件</string>
+    <string name="onboarding_help_image_4">• 旋转 / 镜像：调整方向</string>
+    <string name="onboarding_help_image_5">• 缩放适配：自由缩放 / 适合宽 / 适合屏</string>
+
+    <string name="onboarding_help_section_progress">5. 进度管理</string>
+    <string name="onboarding_help_progress_1">• 每本漫画的当前页码会自动保存，重启后恢复</string>
+    <string name="onboarding_help_progress_2">• 菜单中可点击 ☆ 添加书签</string>
+    <string name="onboarding_help_progress_3">• 「跳转」可输入页码直接定位</string>
+    <string name="onboarding_help_progress_4">• 「缩略图」可显示所有页预览，点击跳转</string>
+
+    <string name="onboarding_help_section_formats">6. 格式支持</string>
+    <string name="onboarding_help_formats_1">• 压缩包：CBZ/ZIP、CBR/RAR、CB7/7Z、CBT/TAR</string>
+    <string name="onboarding_help_formats_2">• 文档：EPUB、PDF、MOBI</string>
+    <string name="onboarding_help_formats_3">• 图片文件夹：JPG / PNG / WebP / GIF / HEIC / BMP</string>
+
+    <string name="onboarding_help_section_privacy">7. 隐私</string>
+    <string name="onboarding_help_privacy_1">• 网络权限仅用于元数据刮削、WebDAV同步等可选功能</string>
+    <string name="onboarding_help_privacy_2">• 默认不会上传任何阅读记录或文件</string>
+
+    <string name="onboarding_help_section_experimental">8. 实验性功能</string>
+    <string name="onboarding_help_experimental_1">• SMB / NAS 流式阅读：入口已预留，目前仅支持浏览 HTTP 文件列表，还不能直接打开漫画</string>
+    <string name="onboarding_help_experimental_2">• WebDAV 同步：配置服务器后支持上传、下载与双向同步阅读进度、书签与收藏</string>
+
+    <!-- 文件浏览器 -->
+    <string name="browser_open_as_comic">打开为漫画</string>
+    <string name="browser_system_file_browser">系统文件浏览</string>
+    <string name="browser_permission_message">需要存储读取权限才能浏览本地漫画</string>
+    <string name="browser_permission_grant">去授权</string>
+    <string name="browser_permission_refresh">已授权，刷新</string>
+    <string name="browser_saf_message">Android 11+ 请使用系统文件浏览器选择漫画目录</string>
+    <string name="browser_saf_open">打开系统文件浏览器</string>
+    <string name="browser_saf_permission_failed">无法保存该目录的访问权限，请重新选择或尝试其他目录</string>
+    <string name="browser_internal_storage">内部存储</string>
+    <string name="browser_sd_card">SD 卡</string>
+    <string name="browser_storage_root">存储根目录</string>
+    <string name="browser_unknown_error">未知错误</string>
+    <string name="browser_type_folder">文件夹</string>
+    <string name="browser_type_cbz">CBZ 漫画</string>
+    <string name="browser_type_cbr">CBR 漫画</string>
+    <string name="browser_type_cb7">CB7 漫画</string>
+    <string name="browser_type_cbt">CBT 漫画</string>
+    <string name="browser_type_epub">EPUB 电子书</string>
+    <string name="browser_type_pdf">PDF 文档</string>
+    <string name="browser_type_mobi">MOBI 电子书</string>
+    <string name="browser_type_image_folder">图片文件夹</string>
+    <string name="browser_type_comic_book">漫画系列</string>
+    <string name="browser_type_unknown">未知</string>
+    <string name="browser_entry_icon_folder">文件夹</string>
+    <string name="browser_entry_icon_file">文件</string>
+    <string name="browser_empty_title">暂无内容</string>
+    <string name="browser_empty_subtitle">当前目录没有可识别的漫画文件或文件夹</string>
+    <string name="browser_error_retry">重试</string>
+
+    <!-- 分卷浏览 -->
+    <string name="chapter_browser_volumes_count">%1$d 卷</string>
+    <string name="chapter_browser_no_chapters">未找到分卷</string>
+    <string name="chapter_browser_pages_count">%1$d 页</string>
+    <string name="chapter_browser_default_cover">默认封面</string>
+    <string name="chapter_browser_search_hint">搜索章节</string>
+    <string name="chapter_browser_no_search_match">未找到匹配的章节</string>
+    <string name="chapter_browser_continue_reading">继续阅读</string>
+
+    <!-- 阅读器 -->
+    <string name="bookshelf_contact_author">联系作者</string>
+    <string name="bookshelf_reading_stats">阅读统计</string>
+    <string name="bookshelf_reading_lists">我的书单</string>
+    <string name="bookshelf_webdav_sync">WebDAV 同步</string>
+    <string name="bookshelf_smb_nas">SMB/NAS 流式阅读</string>
+    <string name="bookshelf_theme">主题与阅读背景</string>
+    <string name="bookshelf_clear_new_badges">清除新漫画标记</string>
+    <string name="bookshelf_settings">设置</string>
+    <string name="bookshelf_github_star">GitHub Star</string>
+    <string name="bookshelf_donation">打赏支持</string>
+    <string name="bookshelf_default_cover">默认封面</string>
+    <string name="bookshelf_categorize">分类</string>
+    <string name="bookshelf_mark_read">标记已读</string>
+    <string name="bookshelf_mark_unread">标记未读</string>
+    <string name="bookshelf_scrape_metadata">刮削元数据</string>
+    <string name="bookshelf_rate_review">评分与短评</string>
+    <string name="bookshelf_clear_cache">清理缓存</string>
+    <string name="bookshelf_remove_bookshelf">删除书架</string>
+    <string name="bookshelf_selected">已选</string>
+    <string name="bookshelf_achievement_unlocked">已解锁</string>
+    <string name="bookshelf_recent_reads">最近阅读</string>
+
+    <string name="reader_chapter_end_icon">下一卷</string>
+    <string name="reader_exit_icon">退出阅读</string>
+    <string name="reader_bookmark_thumbnail">书签缩略图</string>
+    <string name="reader_default_thumbnail">默认缩略图</string>
+    <string name="reader_page_preview">页面预览</string>
+
+    <!-- 书架补充 -->
+    <string name="bookshelf_switch_bookshelf">切换书架</string>
+    <string name="bookshelf_manage_categories">管理分类</string>
+    <string name="bookshelf_favorite">收藏</string>
+    <string name="bookshelf_unfavorite">取消收藏</string>
+    <string name="bookshelf_default_shelf_name">书架</string>
+    <string name="bookshelf_path_level">%1$d 级</string>
+    <string name="bookshelf_selected_count">已选 %1$d 项</string>
+    <string name="bookshelf_marked_read_snackbar">已将 %1$d 本漫画标为已读</string>
+    <string name="bookshelf_mark_read_label">标已读</string>
+    <string name="bookshelf_marked_unread_snackbar">已将 %1$d 本漫画标为未读</string>
+    <string name="bookshelf_mark_unread_label">标未读</string>
+    <string name="bookshelf_toggled_favorite_snackbar">已切换 %1$d 本漫画的收藏状态</string>
+    <string name="bookshelf_categorize_label">分类</string>
+    <string name="bookshelf_rename_label">重命名</string>
+    <string name="bookshelf_delete_label">删除</string>
+    <string name="bookshelf_cancel_label">取消</string>
+    <string name="bookshelf_share_label">分享</string>
+    <string name="bookshelf_share_chooser">分享漫画文件</string>
+    <string name="bookshelf_share_failed">准备分享文件失败</string>
+    <string name="bookshelf_share_empty">没有可分享的文件</string>
+    <string name="bookshelf_share_skipped_snackbar">已跳过 %1$d 个目录/无效项</string>
+    <string name="bookshelf_all_categories">全部分类</string>
+    <string name="bookshelf_error_prefix">错误：%1$s</string>
+    <string name="bookshelf_error_retry">重试</string>
+    <string name="bookshelf_no_comics_in_folder">该目录下没有漫画</string>
+    <string name="bookshelf_cache_size_b">%1$d B</string>
+    <string name="bookshelf_cache_size_kb">%1$d KB</string>
+    <string name="bookshelf_cache_size_mb">%.1f MB</string>
+    <string name="bookshelf_cache_cleared_snackbar">已清理 %1$s 缓存</string>
+    <string name="bookshelf_no_cache_to_clear">没有可清理的缓存</string>
+    <string name="bookshelf_manage_categories_title">管理分类</string>
+    <string name="bookshelf_new_category_name">新分类名称</string>
+    <string name="bookshelf_category_added_snackbar">已添加分类：%1$s</string>
+    <string name="bookshelf_add_label">添加</string>
+    <string name="bookshelf_close_label">关闭</string>
+    <string name="bookshelf_categorize_comic_title">分类：%1$s</string>
+    <string name="bookshelf_categorize_multi_title">为 %1$d 项选择分类</string>
+    <string name="bookshelf_done_label">完成</string>
+    <string name="bookshelf_delete_confirm_title">确认删除</string>
+    <string name="bookshelf_delete_confirm_message">确定要删除选中的 %1$d 个漫画吗？此操作将同时删除文件本身，无法撤销。</string>
+    <string name="bookshelf_deleted_snackbar">已删除 %1$d 个漫画</string>
+    <string name="bookshelf_rename_title">重命名</string>
+    <string name="bookshelf_new_file_name">新文件名</string>
+    <string name="bookshelf_renamed_snackbar">已重命名为 %1$s</string>
+    <string name="bookshelf_rename_failed_snackbar">重命名失败</string>
+    <string name="bookshelf_ok_label">确定</string>
+    <string name="bookshelf_switch_bookshelf_title">切换书架</string>
+    <string name="bookshelf_no_bookshelf_added">尚未添加书架目录</string>
+    <string name="bookshelf_add_bookshelf_label">添加书架</string>
+    <string name="bookshelf_metadata_scrape_title">元数据刮削</string>
+    <string name="bookshelf_metadata_querying">正在查询…</string>
+    <string name="bookshelf_metadata_file_label">文件：%1$s</string>
+    <string name="bookshelf_metadata_title_label">标题：%1$s</string>
+    <string name="bookshelf_metadata_author_label">作者：%1$s</string>
+    <string name="bookshelf_metadata_volume_label">卷：%1$d</string>
+    <string name="bookshelf_metadata_chapter_label">话：%1$s</string>
+    <string name="bookshelf_metadata_year_label">年份：%1$d</string>
+    <string name="bookshelf_metadata_description_label">简介：%1$s</string>
+    <string name="bookshelf_metadata_tags_label">标签：%1$s</string>
+    <string name="bookshelf_metadata_source_label">来源：%1$s</string>
+    <string name="bookshelf_metadata_not_found">未能获取到元数据</string>
+    <string name="bookshelf_smb_nas_toast">SMB/NAS 流式阅读暂未完全开发，仅可浏览远程目录</string>
+    <string name="bookshelf_cleared_new_badges_snackbar">已清除 %1$d 个新标记</string>
+    <string name="bookshelf_cannot_open_browser_toast">无法打开浏览器</string>
+    <string name="bookshelf_status_unread">未读</string>
+    <string name="bookshelf_status_reading">阅读中</string>
+    <string name="bookshelf_status_read">已读</string>
+    <string name="bookshelf_continue_reading">继续阅读</string>
+    <string name="bookshelf_progress_format">%1$d/%2$d 页 · 已读 %3$d%%</string>
+    <string name="bookshelf_empty_subtitle_with_tilde">选择一个文件夹作为书架，里面的漫画就会出现在这里～</string>
+
+    <!-- 书架扩展对话框 -->
+    <string name="bookshelf_contact_author_title">联系作者</string>
+    <string name="bookshelf_author_contact_label">作者联系方式：</string>
+    <string name="bookshelf_author_contact_clip_label">作者联系方式</string>
+    <string name="bookshelf_copy_label">复制</string>
+    <string name="bookshelf_reading_stats_and_achievements">阅读统计与成就</string>
+    <string name="bookshelf_total_comics">书架漫画：%1$d 本</string>
+    <string name="bookshelf_started_reading">已开始阅读：%1$d 本</string>
+    <string name="bookshelf_finished_reading">已读完：%1$d 本</string>
+    <string name="bookshelf_total_pages_flipped">累计翻页：%1$d 页</string>
+    <string name="bookshelf_streak_days">连续阅读：%1$d 天</string>
+    <string name="bookshelf_achievement_badges">成就徽章</string>
+    <string name="bookshelf_stats_note">注：阅读时长、最爱作者/题材等需要云端服务或更复杂的本地埋点，当前版本仅统计翻页与完成数。</string>
+    <string name="bookshelf_my_reading_lists">我的书单</string>
+    <string name="bookshelf_no_reading_lists">还没有书单，点击右下角创建。</string>
+    <string name="bookshelf_create_label">新建</string>
+    <string name="bookshelf_add_comic_to_list">添加漫画</string>
+    <string name="bookshelf_reading_list_items_format">%1$d 本 | %2$s</string>
+    <string name="bookshelf_create_list_title">新建书单</string>
+    <string name="bookshelf_list_name_label">书单名称</string>
+    <string name="bookshelf_list_description_label">描述（可选）</string>
+    <string name="bookshelf_create_button">创建</string>
+    <string name="bookshelf_add_to_list_title">添加到：%1$s</string>
+    <string name="bookshelf_already_added">✓ %1$s</string>
+    <string name="bookshelf_webdav_sync_title">WebDAV 同步</string>
+    <string name="bookshelf_server_url_label">服务器地址</string>
+    <string name="bookshelf_username_label">用户名</string>
+    <string name="bookshelf_password_label">密码</string>
+    <string name="bookshelf_password_show">显示密码</string>
+    <string name="bookshelf_password_hide">隐藏密码</string>
+    <string name="bookshelf_auto_sync_interval_label">自动同步间隔</string>
+    <string name="bookshelf_sync_manual">手动同步</string>
+    <string name="bookshelf_sync_15min">每 15 分钟</string>
+    <string name="bookshelf_sync_30min">每 30 分钟</string>
+    <string name="bookshelf_sync_hourly">每小时</string>
+    <string name="bookshelf_sync_6hours">每 6 小时</string>
+    <string name="bookshelf_sync_12hours">每 12 小时</string>
+    <string name="bookshelf_sync_daily">每天</string>
+    <string name="bookshelf_webdav_testing">正在测试连接…</string>
+    <string name="bookshelf_webdav_test_label">测试</string>
+    <string name="bookshelf_webdav_upload">上传</string>
+    <string name="bookshelf_webdav_download">下载</string>
+    <string name="bookshelf_webdav_bidirectional">双向</string>
+    <string name="bookshelf_webdav_syncing_prefix">正在%1$s…</string>
+    <string name="bookshelf_webdav_result_success">同步结果：%1$s 成功</string>
+    <string name="bookshelf_webdav_result_failure">同步失败：%1$s</string>
+    <string name="bookshelf_webdav_unknown_direction">未知方向</string>
+    <string name="bookshelf_webdav_desc">支持 Nextcloud、坚果云、NAS 等 WebDAV 服务。同步内容：进度、书签、收藏。</string>
+    <string name="bookshelf_theme_picker_title">主题与阅读背景</string>
+    <string name="bookshelf_theme_picker_hint">快速切换阅读背景主题。自定义图片背景需在阅读菜单中后续扩展。</string>
+    <string name="bookshelf_theme_default_black">默认黑</string>
+    <string name="bookshelf_theme_eye_care_paper">护眼纸</string>
+    <string name="bookshelf_theme_frosted_glass">磨砂玻璃</string>
+    <string name="bookshelf_theme_starry_sky">星空</string>
+    <string name="bookshelf_theme_wood">木纹</string>
+    <string name="bookshelf_rating_and_review_title">评分与短评</string>
+    <string name="bookshelf_rating_label">评分：%1$d / 5</string>
+    <string name="bookshelf_review_label">一句话短评</string>
+    <string name="bookshelf_tags_label">标签</string>
+    <string name="bookshelf_new_tag_label">新标签</string>
+    <string name="bookshelf_add_tag">添加</string>
+    <string name="bookshelf_save_label">保存</string>
+    <string name="bookshelf_smb_nas_title">SMB/NAS 流式阅读</string>
+    <string name="bookshelf_smb_nas_url_label">NAS HTTP 文件服务地址</string>
+    <string name="bookshelf_smb_nas_url_placeholder">http://192.168.1.100:5000/comics/</string>
+    <string name="bookshelf_smb_nas_hint">提示：当前使用 HTTP 流式读取。若 NAS 仅提供 SMB，请在 NAS 上开启 WebDAV/HTTP 文件服务，或后续集成 jcifs-ng 库。</string>
+    <string name="bookshelf_remote_directory">远程目录（%1$d 项）</string>
+    <string name="bookshelf_remote_directory_type_folder">目录</string>
+    <string name="bookshelf_remote_directory_type_comic">漫画</string>
+    <string name="bookshelf_remote_directory_type_file">文件</string>
+    <string name="bookshelf_smb_listing_prefix">正在列出 %1$s…</string>
+    <string name="bookshelf_smb_empty_or_unreachable">目录为空或无法访问</string>
+    <string name="bookshelf_remote_comic_address_clip_label">远程漫画地址</string>
+    <string name="bookshelf_copied_address_toast">已复制地址：%1$s</string>
+    <string name="bookshelf_smb_test_browse_label">测试/浏览</string>
+    <string name="bookshelf_smb_testing_connection">正在测试连接…</string>
+    <string name="bookshelf_smb_connection_failed">连接失败：%1$s</string>
+
+    <!-- 阅读器补充 -->
+    <string name="reader_retry">重试</string>
+    <string name="reader_share_source_chooser">分享漫画源文件</string>
+    <string name="reader_share_source_failed_toast">无法获取源文件</string>
+    <string name="reader_share_card_text">来自 %1$s</string>
+    <string name="reader_share_card_chooser">分享漫画卡片</string>
+    <string name="reader_share_card_failed_toast">生成卡片失败</string>
+    <string name="reader_page_preview_title">页面预览 (%1$d)</string>
+    <string name="reader_close_label">关闭</string>
+    <string name="reader_bookmarks_title">书签 (%1$d)</string>
+    <string name="reader_no_bookmarks">暂无书签</string>
+    <string name="reader_bookmark_page">第 %1$d 页</string>
+    <string name="reader_delete_bookmark">删除书签</string>
+    <string name="reader_jump_page_title">跳页</string>
+    <string name="reader_current_chapter">当前分卷：%1$s</string>
+    <string name="reader_page_input_label">页数 (1-%1$d)</string>
+    <string name="reader_jump_label">跳转</string>
+    <string name="reader_cancel_label">取消</string>
+    <string name="reader_chapter_list_title">分卷列表</string>
+    <string name="reader_no_chapters_detected">未检测到分卷</string>
+    <string name="reader_chapter_page_count">%1$s (%2$dP)</string>
+    <string name="reader_back">返回</string>
+    <string name="reader_settings">设置</string>
+    <string name="reader_open_menu">打开菜单</string>
+    <string name="reader_previous_page">上一页</string>
+    <string name="reader_jump_page">跳页</string>
+    <string name="reader_bookmark">收藏</string>
+    <string name="reader_bookmarked">已收藏</string>
+    <string name="reader_share_card">分享卡</string>
+    <string name="reader_share_source">分享源文件</string>
+    <string name="reader_more_actions">更多</string>
+    <string name="reader_tts_stop">停止朗读</string>
+    <string name="reader_tts_start">文字朗读</string>
+    <string name="reader_next_page">下一页</string>
+    <string name="reader_previous_chapter">上一卷</string>
+    <string name="reader_chapter_list">分卷列表</string>
+    <string name="reader_next_chapter">下一卷</string>
+    <string name="reader_loading">加载中…</string>
+    <string name="reader_load_failed">加载失败</string>
+    <string name="reader_toggle_thumbnail_strip">缩略图进度条</string>
+    <string name="reader_load_failed_with_reason">加载失败：%1$s</string>
+    <string name="reader_page_count_format">%1$d / %2$d</string>
+    <string name="page_content_description">第 %1$d 页，共 %2$d 页</string>
+    <string name="reader_magnifier">放大镜</string>
+    <string name="reader_panel_exit">退出分镜</string>
+    <string name="reader_previous_panel">上一格</string>
+    <string name="reader_next_panel">下一格</string>
+    <string name="reader_panel_progress">分镜 %1$d / %2$d</string>
+    <string name="reader_thumbnail">缩略图 %1$d</string>
+
+    <!-- 成就 -->
+    <string name="achievement_first_comic_title">入门读者</string>
+    <string name="achievement_first_comic_desc">读完第一本漫画</string>
+    <string name="achievement_streak_7_title">连续阅读 7 天</string>
+    <string name="achievement_streak_7_desc">累计 7 天打开阅读器</string>
+    <string name="achievement_hundred_comics_title">百漫斩</string>
+    <string name="achievement_hundred_comics_desc">书架中收录 100 本漫画</string>
+    <string name="achievement_night_owl_title">夜猫子</string>
+    <string name="achievement_night_owl_desc">凌晨 2 点还在看漫画</string>
+    <string name="achievement_ten_thousand_pages_title">卷王</string>
+    <string name="achievement_ten_thousand_pages_desc">累计阅读 10000 页</string>
+    <string name="achievement_first_review_title">评论家</string>
+    <string name="achievement_first_review_desc">为第一本漫画写下短评</string>
+    <string name="achievement_first_list_title">书单达人</string>
+    <string name="achievement_first_list_desc">创建第一个书单</string>
+
+    <!-- 主题 -->
+    <string name="theme_ink">经典黑</string>
+    <string name="theme_kraft">牛皮纸</string>
+    <string name="theme_cyber">赛博朋克</string>
+    <string name="theme_eye_care">护眼绿</string>
+    <string name="theme_wine">酒红幕</string>
+    <string name="theme_custom">自定义</string>
+
+    <!-- 解析器错误 -->
+    <string name="parser_unknown_error">未知错误</string>
+    <string name="parser_cb7_no_images">CB7 文件中没有找到图片</string>
+    <string name="parser_cb7_error">CB7 解析失败：%1$s</string>
+    <string name="parser_cbz_no_images">CBZ 文件中没有找到图片</string>
+    <string name="parser_cbz_error">CBZ 解析失败：%1$s</string>
+    <string name="parser_cbr_no_images">CBR 文件中没有找到图片</string>
+    <string name="parser_cbr_error">CBR 解析失败：%1$s</string>
+    <string name="parser_cbt_no_images">CBT 文件中没有找到图片</string>
+    <string name="parser_cbt_error">CBT 解析失败：%1$s</string>
+    <string name="parser_cbt_open_failed">无法打开 CBT 输入流</string>
+    <string name="parser_comicbook_cycle">检测到循环目录，已跳过</string>
+    <string name="parser_comicbook_too_deep">目录嵌套过深</string>
+    <string name="parser_comicbook_no_files">漫画目录下没有可识别的文件</string>
+    <string name="parser_comicbook_no_chapters_or_images">漫画目录下没有可识别的章节文件或图片</string>
+    <string name="parser_epub_no_images">EPUB 中没有找到图片</string>
+    <string name="parser_epub_error">EPUB 解析失败：%1$s</string>
+    <string name="parser_folder_no_images">该目录下没有图片文件</string>
+    <string name="parser_pdf_error">无法打开 PDF：%1$s</string>
+    <string name="parser_pdf_unknown_reason">无法打开 PDF：未知原因</string>
+    <string name="parser_pdf_cancelled">PDF 解析被取消</string>
+    <string name="parser_pdf_read_error">PDF 读取失败：%1$s</string>
+    <string name="parser_pdf_no_pages">PDF 没有页面</string>
+    <string name="parser_mobi_no_images">MOBI 文件中没有找到内容</string>
+    <string name="parser_mobi_error">MOBI 解析失败：%1$s</string>
+    <string name="parser_mobi_invalid">MOBI 文件格式无效</string>
+    <string name="parser_mobi_drm">MOBI 文件受 DRM 保护，无法阅读</string>
 </resources>

@@ -1,0 +1,35 @@
+[
+  {
+    "date": "2026-07-24",
+    "mode": "Health Dashboard",
+    "score": 84,
+    "findings": {
+      "critical": 2,
+      "warning": 3,
+      "suggestion": 0
+    },
+    "scope": "Android 漫画阅读器项目 d:\\manhua2222（覆盖近期改动的 ReaderScreen.kt、BookshelfScreen.kt、ChapterBrowserScreen.kt、BookshelfComicItem.kt 等 UI 文件）"
+  },
+  {
+    "date": "2026-07-24",
+    "mode": "Architecture Audit",
+    "score": 30,
+    "findings": {
+      "critical": 2,
+      "warning": 6,
+      "suggestion": 1
+    },
+    "scope": "整个 Android 漫画阅读器项目 d:\\manhua2222"
+  },
+  {
+    "date": "2026-07-24",
+    "mode": "Tech Debt Assessment",
+    "score": 42,
+    "findings": {
+      "critical": 2,
+      "warning": 5,
+      "suggestion": 3
+    },
+    "scope": "整个 Android 漫画阅读器项目 d:\\manhua2222"
+  }
+]

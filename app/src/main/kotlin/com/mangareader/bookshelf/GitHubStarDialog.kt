@@ -14,9 +14,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mangareader.Constants
+import com.mangareader.R
 
 /**
  * 提示用户在 GitHub 上查看项目并请求 star 的对话框。
@@ -32,18 +34,18 @@ fun GitHubStarDialog(
         icon = {
             Icon(
                 Icons.Default.Star,
-                contentDescription = null,
+                contentDescription = stringResource(R.string.github_star_title),
                 tint = MaterialTheme.colorScheme.primary
             )
         },
-        title = { Text("给项目一个 Star") },
+        title = { Text(stringResource(R.string.github_star_title)) },
         text = {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    "如果您觉得这个应用有用，欢迎前往 GitHub 查看源代码，并给项目点一个 Star ⭐ 支持开发！",
+                    stringResource(R.string.github_star_message),
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
                 )
@@ -68,14 +70,14 @@ fun GitHubStarDialog(
                 TextButton(onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText("GitHub 地址", Constants.GITHUB_REPO_URL))
-                    Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
-                }) { Text("复制链接") }
+                    Toast.makeText(context, context.getString(R.string.github_star_copy_copied_toast), Toast.LENGTH_SHORT).show()
+                }) { Text(stringResource(R.string.github_star_copy)) }
                 Spacer(modifier = Modifier.width(8.dp))
-                TextButton(onClick = onOpenGitHub) { Text("前往 Star") }
+                TextButton(onClick = onOpenGitHub) { Text(stringResource(R.string.github_star_open)) }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
         }
     )
 }
@@ -90,24 +92,24 @@ fun DonationDialog(onDismiss: () -> Unit) {
         icon = {
             Icon(
                 Icons.Default.Star,
-                contentDescription = null,
+                contentDescription = stringResource(R.string.donation_title),
                 tint = MaterialTheme.colorScheme.primary
             )
         },
-        title = { Text("打赏功能") },
+        title = { Text(stringResource(R.string.donation_title)) },
         text = {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    "打赏功能暂未开通。",
+                    stringResource(R.string.donation_message),
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "感谢您的支持，请期待后续更新。",
+                    stringResource(R.string.donation_thanks),
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -115,7 +117,7 @@ fun DonationDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("确定") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_ok)) }
         }
     )
 }

@@ -1,6 +1,7 @@
 package com.mangareader.provider
 
 import android.graphics.Bitmap
+import com.mangareader.data.ComicProvider
 
 /**
  * 网络协议直读（SMB/FTP/WebDAV/云盘）的 [ComicProvider] 接口预留。

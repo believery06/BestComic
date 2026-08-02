@@ -1,5 +1,6 @@
 package com.mangareader.utils
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -20,24 +21,29 @@ import java.net.URL
  */
 object SmbClient {
 
+    // 单条 Range 请求最大允许 50MB，防止恶意/异常 Content-Length 导致 OOM。
+    private const val MAX_RANGE_BYTES = 50L * 1024 * 1024
+
     /**
      * 测试NAS连接是否可用
      * @param url NAS HTTP文件服务地址
      */
     suspend fun testConnection(url: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val conn = createConnection(url, "HEAD")
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code in 200..299) {
-                val contentLength = conn.getHeaderField("Content-Length")?.toLongOrNull() ?: 0
-                val acceptRanges = conn.getHeaderField("Accept-Ranges")
-                Result.success(
-                    "连接成功 | 大小: ${formatSize(contentLength)} | 支持Range: ${acceptRanges ?: "否"}"
-                )
-            } else {
-                Result.failure(Exception("服务器返回错误：HTTP $code"))
+            useConnection(url, "HEAD") { conn ->
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val contentLength = conn.getHeaderField("Content-Length")?.toLongOrNull() ?: 0
+                    val acceptRanges = conn.getHeaderField("Accept-Ranges")
+                    Result.success(
+                        "连接成功 | 大小: ${formatSize(contentLength)} | 支持Range: ${acceptRanges ?: "否"}"
+                    )
+                } else {
+                    Result.failure(Exception("服务器返回错误：HTTP $code"))
+                }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -48,10 +54,11 @@ object SmbClient {
      */
     suspend fun getFileSize(url: String): Long = withContext(Dispatchers.IO) {
         try {
-            val conn = createConnection(url, "HEAD")
-            val size = conn.getHeaderField("Content-Length")?.toLongOrNull() ?: 0L
-            conn.disconnect()
-            size
+            useConnection(url, "HEAD") { conn ->
+                conn.getHeaderField("Content-Length")?.toLongOrNull() ?: 0L
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             0L
         }
@@ -64,27 +71,36 @@ object SmbClient {
     suspend fun readRange(url: String, start: Long, end: Long): ByteArray? =
         withContext(Dispatchers.IO) {
             try {
-                val conn = createConnection(url, "GET")
-                conn.setRequestProperty("Range", "bytes=$start-$end")
-                val code = conn.responseCode
-                if (code != 206 && code !in 200..299) {
-                    conn.disconnect()
+                if (start < 0 || end < start || end - start + 1 > MAX_RANGE_BYTES) {
                     return@withContext null
                 }
-                val contentLength = conn.getHeaderField("Content-Length")?.toIntOrNull()
-                    ?: ((end - start + 1).toInt())
-                val buffer = ByteArray(contentLength)
-                conn.inputStream.use { input ->
-                    var offset = 0
-                    var bytesRead: Int
-                    while (offset < contentLength) {
-                        bytesRead = input.read(buffer, offset, contentLength - offset)
-                        if (bytesRead < 0) break
-                        offset += bytesRead
+                useConnection(url, "GET") { conn ->
+                    conn.setRequestProperty("Range", "bytes=$start-$end")
+                    val code = conn.responseCode
+                    if (code != 206 && code !in 200..299) {
+                        return@useConnection null
                     }
+                    val contentLength = conn.getHeaderField("Content-Length")?.toLongOrNull()
+                        ?.coerceAtMost(MAX_RANGE_BYTES)
+                        ?.toInt()
+                        ?: ((end - start + 1).toInt())
+                    if (contentLength <= 0 || contentLength > MAX_RANGE_BYTES) {
+                        return@useConnection null
+                    }
+                    val buffer = ByteArray(contentLength)
+                    conn.inputStream.use { input ->
+                        var offset = 0
+                        var bytesRead: Int
+                        while (offset < contentLength) {
+                            bytesRead = input.read(buffer, offset, contentLength - offset)
+                            if (bytesRead < 0) break
+                            offset += bytesRead
+                        }
+                    }
+                    buffer
                 }
-                conn.disconnect()
-                buffer
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -96,28 +112,28 @@ object SmbClient {
     suspend fun readFully(url: String, maxSize: Long = 100 * 1024 * 1024): ByteArray? =
         withContext(Dispatchers.IO) {
             try {
-                val conn = createConnection(url, "GET")
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    conn.disconnect()
-                    return@withContext null
-                }
-                val contentLength = conn.getHeaderField("Content-Length")?.toLongOrNull()
-                    ?: maxSize
-                if (contentLength > maxSize) {
-                    conn.disconnect()
-                    return@withContext null
-                }
-                val baos = ByteArrayOutputStream(contentLength.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-                conn.inputStream.use { input ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } >= 0) {
-                        baos.write(buffer, 0, bytesRead)
+                useConnection(url, "GET") { conn ->
+                    val code = conn.responseCode
+                    if (code !in 200..299) {
+                        return@useConnection null
                     }
+                    val contentLength = conn.getHeaderField("Content-Length")?.toLongOrNull()
+                        ?: maxSize
+                    if (contentLength > maxSize) {
+                        return@useConnection null
+                    }
+                    val baos = ByteArrayOutputStream(contentLength.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                    conn.inputStream.use { input ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } >= 0) {
+                            baos.write(buffer, 0, bytesRead)
+                        }
+                    }
+                    baos.toByteArray()
                 }
-                conn.disconnect()
-                baos.toByteArray()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -155,6 +171,8 @@ object SmbClient {
 
             // 4. 读取压缩数据
             readRange(url, dataOffset, dataOffset + entry.compressedSize - 1)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
@@ -254,6 +272,8 @@ object SmbClient {
                     pos += 46 + fileNameLen + extraLen + commentLen
                 }
                 entries
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 emptyList()
             }
@@ -264,17 +284,18 @@ object SmbClient {
      */
     suspend fun listDirectory(url: String): List<RemoteFileInfo> = withContext(Dispatchers.IO) {
         try {
-            val conn = createConnection(url, "GET")
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                conn.disconnect()
-                return@withContext emptyList()
-            }
-            val html = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
+            useConnection(url, "GET") { conn ->
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    return@useConnection emptyList()
+                }
+                val html = conn.inputStream.bufferedReader().use { it.readText() }
 
-            // 简单解析HTML目录列表
-            parseDirectoryListing(html, url)
+                // 简单解析HTML目录列表
+                parseDirectoryListing(html, url)
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             emptyList()
         }
@@ -296,7 +317,8 @@ object SmbClient {
             val isComic = name.let { n ->
                 n.endsWith(".cbz") || n.endsWith(".zip") || n.endsWith(".cbr") ||
                         n.endsWith(".rar") || n.endsWith(".cb7") || n.endsWith(".7z") ||
-                        n.endsWith(".cbt") || n.endsWith(".epub") || n.endsWith(".pdf")
+                        n.endsWith(".cbt") || n.endsWith(".epub") || n.endsWith(".pdf") ||
+                        n.endsWith(".mobi") || n.endsWith(".azw") || n.endsWith(".azw3")
             }
 
             files.add(
@@ -327,11 +349,27 @@ object SmbClient {
 
     private fun createConnection(urlString: String, method: String): HttpURLConnection {
         val url = URL(urlString)
-        return (url.openConnection() as HttpURLConnection).apply {
+        val conn = url.openConnection() as? HttpURLConnection
+            ?: throw IllegalArgumentException("仅支持 HTTP/HTTPS 协议")
+        conn.apply {
             requestMethod = method
             connectTimeout = 10000
             readTimeout = 30000
             setRequestProperty("User-Agent", "BestComic/1.0")
+        }
+        return conn
+    }
+
+    private inline fun <T> useConnection(
+        urlString: String,
+        method: String,
+        block: (HttpURLConnection) -> T
+    ): T {
+        val conn = createConnection(urlString, method)
+        return try {
+            block(conn)
+        } finally {
+            conn.disconnect()
         }
     }
 

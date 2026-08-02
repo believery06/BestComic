@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
+import com.mangareader.R
 import com.mangareader.data.ComicPage
 import com.mangareader.data.ComicType
 import com.mangareader.utils.FileListHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -32,10 +34,13 @@ class ComicBookParser : ComicParser {
     private val innerParsers = java.util.Collections.synchronizedList(mutableListOf<ComicParser>())
 
     override fun close() {
+        // 必须对整个遍历加锁，避免 parse() 中 add 与 close() 并发导致 ConcurrentModificationException。
+        val snapshot: List<ComicParser>
         synchronized(innerParsers) {
-            innerParsers.forEach { runCatching { it.close() } }
+            snapshot = innerParsers.toList()
             innerParsers.clear()
         }
+        snapshot.forEach { runCatching { it.close() } }
     }
 
     override suspend fun parse(context: Context, uri: Uri): ParserResult =
@@ -50,32 +55,36 @@ class ComicBookParser : ComicParser {
         val uriKey = uri.toString()
         if (!visited.add(uriKey)) {
             Log.w(TAG, "Cycle detected or URI revisited, skip: $uri")
-            return@withContext ParserResult.Error("检测到循环目录，已跳过")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_comicbook_cycle))
         }
         if (depth > MAX_DEPTH) {
             Log.w(TAG, "Max depth exceeded at: $uri")
-            return@withContext ParserResult.Error("目录嵌套过深")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_comicbook_too_deep))
         }
 
         val children = FileListHelper.listChildren(context, uri)
         if (children.isEmpty()) {
-            return@withContext ParserResult.Error("漫画目录下没有可识别的文件")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_comicbook_no_files))
         }
 
         val chapterFiles = children.filter { !it.isDirectory && ParserFactory.detectType(it.name) != ComicType.UNKNOWN }
             .map { ChapterFile(it.name, it.uri, ParserFactory.detectType(it.name)) }
-            .sortedWith { a, b -> naturalCompare(a.title, b.title) }
+            .sortedWith { a, b -> VolumeSortHelper.compareNames(a.title, b.title) }
 
         val imageFiles = children.filter { !it.isDirectory && ParserFactory.isImageFile(it.name) }
             .sortedWith { a, b -> naturalCompare(a.name, b.name) }
 
         val subDirs = children.filter { it.isDirectory }
+            .sortedWith { a, b -> VolumeSortHelper.compareNames(a.name, b.name) }
 
         if (chapterFiles.isEmpty() && imageFiles.isEmpty() && subDirs.isEmpty()) {
-            return@withContext ParserResult.Error("漫画目录下没有可识别的章节文件或图片")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_comicbook_no_chapters_or_images))
         }
 
         val allPages = mutableListOf<ComicPage>()
+        // 本层创建的 parser 先收集到局部列表，全部创建完成后再一次性合并到 innerParsers，
+        // 避免 async 执行期间与 close() 并发修改 innerParsers。
+        val localParsers = mutableListOf<ComicParser>()
 
         if (imageFiles.isNotEmpty()) {
             val imagePages = imageFiles.mapIndexed { idx, entry ->
@@ -91,7 +100,7 @@ class ComicBookParser : ComicParser {
 
         val chapterDeferreds = chapterFiles.mapNotNull { chapter ->
             val parser = ParserFactory.getParser(chapter.type) ?: return@mapNotNull null
-            innerParsers.add(parser)
+            localParsers.add(parser)
             async {
                 try {
                     when (val result = parser.parse(context, chapter.uri)) {
@@ -103,6 +112,8 @@ class ComicBookParser : ComicParser {
                             emptyList()
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Chapter parse exception: ${chapter.title}", e)
                     emptyList()
@@ -126,7 +137,7 @@ class ComicBookParser : ComicParser {
                 }
             } else {
                 val parser = ParserFactory.getParser(subType) ?: return@mapNotNull null
-                innerParsers.add(parser)
+                localParsers.add(parser)
                 async {
                     try {
                         when (val result = parser.parse(context, subDir.uri)) {
@@ -138,12 +149,19 @@ class ComicBookParser : ComicParser {
                                 emptyList()
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.w(TAG, "Subdir parse exception: ${subDir.name}", e)
                         emptyList()
                     }
                 }
             }
+        }
+
+        // 解析任务创建完毕后再统一注册到 innerParsers，避免并发遍历问题。
+        if (localParsers.isNotEmpty()) {
+            synchronized(innerParsers) { innerParsers.addAll(localParsers) }
         }
 
         val parsedChapterPages = chapterDeferreds.awaitAll().flatten()
@@ -153,7 +171,10 @@ class ComicBookParser : ComicParser {
         allPages.addAll(parsedSubDirPages)
 
         if (allPages.isEmpty()) {
-            return@withContext FolderParser().parse(context, uri)
+            // 回退到 FolderParser 时也要纳入 innerParsers 管理，确保 close() 能统一关闭。
+            val folderParser = FolderParser()
+            synchronized(innerParsers) { innerParsers.add(folderParser) }
+            return@withContext folderParser.parse(context, uri)
         }
 
         ParserResult.Success(allPages, ComicType.COMIC_BOOK)

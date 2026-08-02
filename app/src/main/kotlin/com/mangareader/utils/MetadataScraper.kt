@@ -1,5 +1,8 @@
 package com.mangareader.utils
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -54,6 +57,7 @@ object MetadataScraper {
         val name = filename.removeSuffix(".zip").removeSuffix(".cbz")
             .removeSuffix(".cbr").removeSuffix(".cb7").removeSuffix(".cbt")
             .removeSuffix(".epub").removeSuffix(".pdf")
+            .removeSuffix(".mobi").removeSuffix(".azw").removeSuffix(".azw3")
             .trim()
 
         for (pattern in patterns) {
@@ -93,26 +97,26 @@ object MetadataScraper {
     }
 
     /**
-     * 从Bangumi API查询漫画元数据
+     * 从Bangumi API查询漫画元数据。网络 IO 在 [Dispatchers.IO] 上执行，避免阻塞主线程。
      */
-    suspend fun searchBangumi(keyword: String): ComicMetadata? {
-        return try {
-            val encoded = URLEncoder.encode(keyword, "UTF-8")
-            val url = URL("https://api.bgm.tv/search/subject/$encoded?type=1&responseGroup=small")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "BestComic/1.0")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
+    suspend fun searchBangumi(keyword: String): ComicMetadata? = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(keyword, "UTF-8")
+        val url = URL("https://api.bgm.tv/search/subject/$encoded?type=1&responseGroup=small")
+        val conn = url.openConnection() as? HttpURLConnection ?: return@withContext null
+        conn.apply {
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "BestComic/1.0")
+            connectTimeout = 5000
+            readTimeout = 5000
+        }
+        try {
+            if (conn.responseCode != 200) return@withContext null
 
-            if (conn.responseCode != 200) return null
-
-            val body = conn.inputStream.bufferedReader().readText()
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
             val result = json.parseToJsonElement(body).jsonObject
 
-            val list = result["list"]?.jsonArray ?: return null
-            if (list.size == 0) return null
+            val list = result["list"]?.jsonArray ?: return@withContext null
+            if (list.size == 0) return@withContext null
 
             val item = list[0].jsonObject
             ComicMetadata(
@@ -124,31 +128,35 @@ object MetadataScraper {
                 tags = emptyList(),
                 source = "bangumi"
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
+        } finally {
+            conn.disconnect()
         }
     }
 
-    /** 从MangaDex API查询 */
-    suspend fun searchMangaDex(title: String): ComicMetadata? {
-        return try {
-            val encoded = URLEncoder.encode(title, "UTF-8")
-            val url = URL("https://api.mangadex.org/manga?title=$encoded&limit=1&includes[]=cover_art")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "BestComic/1.0")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-
-            if (conn.responseCode != 200) return null
-            val body = conn.inputStream.bufferedReader().readText()
+    /** 从MangaDex API查询。网络 IO 在 [Dispatchers.IO] 上执行，避免阻塞主线程。 */
+    suspend fun searchMangaDex(title: String): ComicMetadata? = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(title, "UTF-8")
+        val url = URL("https://api.mangadex.org/manga?title=$encoded&limit=1&includes[]=cover_art")
+        val conn = url.openConnection() as? HttpURLConnection ?: return@withContext null
+        conn.apply {
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "BestComic/1.0")
+            connectTimeout = 5000
+            readTimeout = 5000
+        }
+        try {
+            if (conn.responseCode != 200) return@withContext null
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
             val result = json.parseToJsonElement(body).jsonObject
-            val data = result["data"]?.jsonArray ?: return null
-            if (data.size == 0) return null
+            val data = result["data"]?.jsonArray ?: return@withContext null
+            if (data.size == 0) return@withContext null
 
             val manga = data[0].jsonObject
-            val attrs = manga["attributes"]?.jsonObject ?: return null
+            val attrs = manga["attributes"]?.jsonObject ?: return@withContext null
             val titleObj = attrs["title"]?.jsonObject
             val titleEn = titleObj?.get("en")?.jsonPrimitive?.content ?: title
 
@@ -179,8 +187,12 @@ object MetadataScraper {
                 year = attrs["year"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
                 source = "mangadex"
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
+        } finally {
+            conn.disconnect()
         }
     }
 }

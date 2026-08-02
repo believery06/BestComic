@@ -45,71 +45,78 @@ object PanelDetector {
             val scale = min(400f / max(w, h), 1f)
             val sw = (w * scale).toInt().coerceAtLeast(1)
             val sh = (h * scale).toInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(bitmap, sw, sh, true)
-
-            val pixels = IntArray(sw * sh)
-            scaled.getPixels(pixels, 0, sw, 0, 0, sw, sh)
-
-            // 1. 边缘检测（Sobel简化版）
-            val edges = BooleanArray(sw * sh)
-            for (y in 1 until sh - 1 step SAMPLE_STEP) {
-                for (x in 1 until sw - 1 step SAMPLE_STEP) {
-                    val idx = y * sw + x
-                    val gx = grayDiff(pixels[idx + 1], pixels[idx - 1])
-                    val gy = grayDiff(pixels[idx + sw], pixels[idx - sw])
-                    edges[idx] = (gx * gx + gy * gy) > EDGE_THRESHOLD * EDGE_THRESHOLD
-                }
+            val scaled = try {
+                Bitmap.createScaledBitmap(bitmap, sw, sh, true)
+            } catch (_: OutOfMemoryError) {
+                android.util.Log.w("PanelDetector", "分镜检测缩放 OOM，降级跳过检测")
+                return@withContext emptyList()
             }
 
-            // 对边缘图做膨胀，连接断开的边缘
-            val dilated = BooleanArray(sw * sh)
-            for (y in 1 until sh - 1) {
-                for (x in 1 until sw - 1) {
-                    val idx = y * sw + x
-                    if (edges[idx]) {
-                        for (dy in -1..1) {
-                            for (dx in -1..1) {
-                                val nidx = (y + dy) * sw + (x + dx)
-                                if (nidx in dilated.indices) dilated[nidx] = true
+            try {
+                val pixels = IntArray(sw * sh)
+                scaled.getPixels(pixels, 0, sw, 0, 0, sw, sh)
+
+                // 1. 边缘检测（Sobel简化版）
+                val edges = BooleanArray(sw * sh)
+                for (y in 1 until sh - 1 step SAMPLE_STEP) {
+                    for (x in 1 until sw - 1 step SAMPLE_STEP) {
+                        val idx = y * sw + x
+                        val gx = grayDiff(pixels[idx + 1], pixels[idx - 1])
+                        val gy = grayDiff(pixels[idx + sw], pixels[idx - sw])
+                        edges[idx] = (gx * gx + gy * gy) > EDGE_THRESHOLD * EDGE_THRESHOLD
+                    }
+                }
+
+                // 对边缘图做膨胀，连接断开的边缘
+                val dilated = BooleanArray(sw * sh)
+                for (y in 1 until sh - 1) {
+                    for (x in 1 until sw - 1) {
+                        val idx = y * sw + x
+                        if (edges[idx]) {
+                            for (dy in -1..1) {
+                                for (dx in -1..1) {
+                                    val nidx = (y + dy) * sw + (x + dx)
+                                    if (nidx in dilated.indices) dilated[nidx] = true
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // 2. 扫描水平/垂直投影找分界线
-            val hProj = IntArray(sh)
-            val vProj = IntArray(sw)
-            for (y in 0 until sh) {
-                var count = 0
-                for (x in 0 until sw) {
-                    if (dilated[y * sw + x]) count++
-                }
-                hProj[y] = count
-            }
-            for (x in 0 until sw) {
-                var count = 0
+                // 2. 扫描水平/垂直投影找分界线
+                val hProj = IntArray(sh)
+                val vProj = IntArray(sw)
                 for (y in 0 until sh) {
-                    if (dilated[y * sw + x]) count++
+                    var count = 0
+                    for (x in 0 until sw) {
+                        if (dilated[y * sw + x]) count++
+                    }
+                    hProj[y] = count
                 }
-                vProj[x] = count
+                for (x in 0 until sw) {
+                    var count = 0
+                    for (y in 0 until sh) {
+                        if (dilated[y * sw + x]) count++
+                    }
+                    vProj[x] = count
+                }
+
+                // 找水平分界线（行间隙）
+                val hGaps = findGaps(hProj, sh, sw)
+                // 找垂直分界线（列间隙）
+                val vGaps = findGaps(vProj, sw, sh)
+
+                // 3. 生成分镜区域
+                val panels = generatePanels(hGaps, vGaps, sw, sh, w, h, scale)
+
+                // 4. 按阅读顺序排序
+                return@withContext sortPanels(panels, rtl)
+            } finally {
+                // 释放缩略图，避免内存泄漏
+                if (scaled !== bitmap && !scaled.isRecycled) {
+                    runCatching { scaled.recycle() }
+                }
             }
-
-            // 找水平分界线（行间隙）
-            val hGaps = findGaps(hProj, sh, sw)
-            // 找垂直分界线（列间隙）
-            val vGaps = findGaps(vProj, sw, sh)
-
-            // 3. 生成分镜区域
-            val panels = generatePanels(hGaps, vGaps, sw, sh, w, h, scale)
-
-            // 4. 按阅读顺序排序
-            val result = sortPanels(panels, rtl)
-            // 释放缩略图，避免内存泄漏
-            if (scaled !== bitmap && !scaled.isRecycled) {
-                runCatching { scaled.recycle() }
-            }
-            result
         }
 
     private fun grayDiff(a: Int, b: Int): Int {

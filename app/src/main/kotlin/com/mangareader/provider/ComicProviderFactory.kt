@@ -3,6 +3,7 @@ package com.mangareader.provider
 import android.content.Context
 import android.net.Uri
 import com.mangareader.data.ComicEntry
+import com.mangareader.data.ComicProvider
 import com.mangareader.data.ComicType
 import com.mangareader.parser.ComicBookParser
 import com.mangareader.parser.ParserFactory
@@ -12,7 +13,7 @@ import com.mangareader.parser.ParserResult
  * 根据 [ComicEntry] 创建对应的 [ComicProvider]。
  *
  * 目前优先复用现有 parser，通过 [ParserBasedComicProvider] 适配；
- * 后续可逐步替换为原生 Provider（如 [LocalFolderProvider]、[ZipArchiveProvider] 等），
+ * 后续可逐步替换为原生 Provider（如 [LocalFolderProvider] 等），
  * 上层阅读器代码无需改动。
  */
 object ComicProviderFactory {

@@ -1,4 +1,4 @@
-package com.mangareader.provider
+package com.mangareader.data
 
 import android.graphics.Bitmap
 import java.io.InputStream
@@ -8,6 +8,9 @@ import java.io.InputStream
  *
  * 本地文件、压缩包、PDF、EPUB、网络文件（SMB/FTP/云盘）以及未来插件都通过此接口
  * 向阅读器提供页面。上层阅读、渲染、缓存逻辑不关心数据实际来源。
+ *
+ * 注：该接口原位于 `provider` 包，现上提到 `data` 包以打破 `data ↔ provider` 循环依赖。
+ * 具体实现仍保留在 `provider` 包中。
  */
 interface ComicProvider : AutoCloseable {
 
@@ -38,13 +41,9 @@ interface ComicProvider : AutoCloseable {
     /** 获取页面所属章节标题，无章节时返回空字符串 */
     fun getChapterTitle(index: Int): String = ""
 
+    /** 获取页面关联的文本内容，用于 TTS 朗读；不支持时返回 null。 */
+    suspend fun getPageText(index: Int): String? = null
+
     /** 释放底层资源（压缩包句柄、PDF 渲染器、网络连接等） */
     override fun close() {}
 }
-
-/** 章节信息，由 [ComicProvider] 在支持章节时返回 */
-data class ChapterInfo(
-    val title: String,
-    val startIndex: Int,
-    val endIndex: Int
-)

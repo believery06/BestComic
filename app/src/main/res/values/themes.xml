@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MangaReader" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- 应用主题为深色 Material，与「内容优先，UI 隐形」的暗色主调保持一致。 -->
+    <style name="Theme.MangaReader" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/black</item>
-        <item name="android:statusBarColor">@color/black</item>
-        <item name="android:navigationBarColor">@color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 </resources>

@@ -2,7 +2,6 @@ package com.mangareader.utils
 
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
@@ -41,12 +40,12 @@ object FileListHelper {
             else -> emptyList()
         }
 
-        if (result.isNotEmpty()) {
-            synchronized(cache) {
-                cache[key] = result
-                while (cache.size > MAX_CACHE_SIZE) {
-                    cache.keys.firstOrNull()?.let { cache.remove(it) }
-                }
+        // 空目录也缓存，避免用户反复进入空 SAF 目录时重复发起 DocumentFile 查询。
+        // 文件变更通过 FileListHelper.clearCache() / ReaderViewModel.loadComic() 等入口主动失效。
+        synchronized(cache) {
+            cache[key] = result
+            while (cache.size > MAX_CACHE_SIZE) {
+                cache.keys.firstOrNull()?.let { cache.remove(it) }
             }
         }
         return result
@@ -135,7 +134,7 @@ object FileListHelper {
         }
 
         // 策略 3: 尝试将 content:// URI 转为文件路径（需要 MANAGE_EXTERNAL_STORAGE）
-        val filePath = contentUriToFilePath(uri)
+        val filePath = contentUriToFilePath(context, uri)
         if (filePath != null) {
             val fileResult = listFileChildren(Uri.fromFile(File(filePath)))
             if (fileResult.isNotEmpty()) return fileResult
@@ -178,7 +177,7 @@ object FileListHelper {
      * 尝试将 SAF content:// URI 转为文件系统路径。
      * 仅支持 ExternalStorageProvider 的 primary 和 SD 卡路径。
      */
-    private fun contentUriToFilePath(uri: Uri): String? {
+    private fun contentUriToFilePath(context: Context, uri: Uri): String? {
         val authority = uri.authority ?: return null
         if (authority != "com.android.externalstorage.documents") return null
 
@@ -193,9 +192,10 @@ object FileListHelper {
         return when {
             docId.startsWith("primary:") -> {
                 val relative = docId.substringAfter("primary:")
-                File(Environment.getExternalStorageDirectory(), relative).absolutePath
+                val primaryRoot = getPrimaryStorageRoot(context) ?: return null
+                File(primaryRoot, relative).absolutePath
             }
-            docId == "primary" -> Environment.getExternalStorageDirectory().absolutePath
+            docId == "primary" -> getPrimaryStorageRoot(context)
             else -> {
                 // 可能是 SD 卡路径，格式如 "1234-5678:folder/file"
                 val colonIdx = docId.indexOf(':')
@@ -203,14 +203,42 @@ object FileListHelper {
                     val storageId = docId.substring(0, colonIdx)
                     val relative = docId.substring(colonIdx + 1)
                     // 尝试在挂载点中查找
-                    val externalDirs = Environment.getExternalStorageDirectory().parentFile
-                    val sdRoot = File(externalDirs, storageId)
-                    if (sdRoot.exists()) {
+                    val sdRoot = getSdCardRoot(context, storageId)
+                    if (sdRoot != null && sdRoot.exists()) {
                         File(sdRoot, relative).absolutePath
                     } else null
                 } else null
             }
         }
+    }
+
+    /**
+     * 通过 Context.getExternalFilesDir 反推主存储根目录，
+     * 避免使用废弃的 Environment.getExternalStorageDirectory。
+     */
+    private fun getPrimaryStorageRoot(context: Context): String? {
+        val externalFiles = context.getExternalFilesDir(null) ?: return null
+        val path = externalFiles.absolutePath
+        val marker = "/Android/data/"
+        val idx = path.indexOf(marker)
+        return if (idx > 0) path.substring(0, idx) else null
+    }
+
+    /**
+     * 通过 Context.getExternalFilesDirs 匹配 storageId 并反推 SD 卡根目录。
+     */
+    private fun getSdCardRoot(context: Context, storageId: String): File? {
+        val dirs = context.getExternalFilesDirs(null)
+        for (dir in dirs) {
+            if (dir == null) continue
+            val path = dir.absolutePath
+            if (path.contains("/$storageId/")) {
+                val marker = "/Android/data/"
+                val idx = path.indexOf(marker)
+                if (idx > 0) return File(path.substring(0, idx))
+            }
+        }
+        return null
     }
 
     // ── Convenience filters ──────────────────────────────────────────────

@@ -1,14 +1,17 @@
 package com.mangareader.provider
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.util.Log
 import com.mangareader.data.ComicPage
+import com.mangareader.data.ComicProvider
 import com.mangareader.parser.ComicParser
+import com.mangareader.utils.BitmapDecoderUtils
+import kotlinx.coroutines.CancellationException
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
-/**
- * 基于现有 [ComicParser] 实现的 [ComicProvider] 适配器。
+/** * 基于现有 [ComicParser] 实现的 [ComicProvider] 适配器。
  *
  * 在完全迁移到原生 Provider 之前，它把 parser 解析出的 [ComicPage] 列表
  * 包装成统一接口，使阅读器可以按页按需读取并复用缓存层。
@@ -16,14 +19,29 @@ import java.io.InputStream
 class ParserBasedComicProvider(
     override val title: String,
     private val pages: List<ComicPage>,
-    private val parser: ComicParser? = null,
+    private var parser: ComicParser? = null,
     override val cacheId: String = title
 ) : ComicProvider {
 
     override val pageCount: Int get() = pages.size
 
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    companion object {
+        private const val TAG = "ParserBasedComicProvider"
+    }
+
     override suspend fun getPage(index: Int): Bitmap? {
-        return pages.getOrNull(index)?.load?.let { it.invoke() }
+        return try {
+            pages.getOrNull(index)?.load?.let { loader ->
+                loader.invoke()?.takeIf { !it.isRecycled }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "加载页面失败 index=$index", e)
+            null
+        }
     }
 
     override suspend fun getPageStream(index: Int): InputStream? {
@@ -38,6 +56,10 @@ class ParserBasedComicProvider(
         return pages.getOrNull(index)?.chapterTitle ?: ""
     }
 
+    override suspend fun getPageText(index: Int): String? {
+        return pages.getOrNull(index)?.textContent?.takeIf { it.isNotBlank() }
+    }
+
     override suspend fun getThumbnail(index: Int, maxDimension: Int): Bitmap? {
         val page = pages.getOrNull(index) ?: return null
         // 优先从原始字节流解码缩略图，避免全分辨率位图进入内存
@@ -46,61 +68,46 @@ class ParserBasedComicProvider(
                 provider.invoke()?.use { stream ->
                     return decodeSampled(stream, maxDimension, maxDimension)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "加载缩略图流失败", e)
             }
         }
-        // fallback：按旧路径加载完整位图再缩放（主要用于 PDF 等无法提供流的格式）
+        // fallback：按旧路径加载完整位图再缩放（主要用于 PDF 等无法提供流的格式）。
+        // 注意：此路径仍可能加载大图，仅作为兜底；建议各 Provider 都实现 loadStream。
         return try {
             val raw = page.load.let { it.invoke() } ?: return null
             if (raw.isRecycled) return null
             val scale = (maxDimension.toFloat() / maxOf(raw.width, raw.height)).coerceAtMost(1f)
             val w = (raw.width * scale).toInt().coerceAtLeast(1)
             val h = (raw.height * scale).toInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(raw, w, h, true)
-            if (scaled !== raw && !raw.isRecycled) {
-                runCatching { raw.recycle() }
-            }
-            scaled
+            // 不回收 raw：该位图可能来自 PageCacheManager 内存缓存或 ComicPage 共享对象，
+            // 回收它会导致其他位置访问已回收位图。创建缩略图副本后让原图由缓存/GC 管理。
+            Bitmap.createScaledBitmap(raw, w, h, true)
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "缩略图 fallback OOM", e)
+            null
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "加载缩略图失败", e)
             null
         }
     }
 
     override fun close() {
+        // 幂等关闭：避免重复调用导致底层解析器异常或资源二次释放。
+        if (!closed.compareAndSet(false, true)) return
         parser?.close()
+        parser = null
     }
 
     private fun decodeSampled(stream: InputStream, reqWidth: Int, reqHeight: Int): Bitmap? {
         return try {
             val bytes = stream.use { it.readBytes() }
-            if (bytes.isEmpty()) return null
-            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
-            if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
-            val sample = calculateInSampleSize(boundsOptions.outWidth, boundsOptions.outHeight, reqWidth, reqHeight)
-            val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+            BitmapDecoderUtils.decodeSampled(bytes, reqWidth, reqHeight, tag = TAG)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "采样解码缩略图失败", e)
             null
         }
-    }
-
-    private fun calculateInSampleSize(width: Int, height: Int, reqWidth: Int, reqHeight: Int): Int {
-        if (width <= 0 || height <= 0 || reqWidth <= 0 || reqHeight <= 0) return 1
-        var inSampleSize = 1
-        var halfWidth = width
-        var halfHeight = height
-        while (halfWidth / 2 >= reqWidth && halfHeight / 2 >= reqHeight) {
-            halfWidth /= 2
-            halfHeight /= 2
-            inSampleSize *= 2
-        }
-        return inSampleSize
     }
 }

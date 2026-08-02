@@ -1,6 +1,8 @@
 package com.mangareader.data
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
+import com.mangareader.R
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -10,6 +12,7 @@ import kotlinx.serialization.json.Json
  * 屏幕划分多个点击区域，每个区域可映射不同动作
  * 支持单击/双击/长按/双指等多种手势
  */
+@Immutable
 @Serializable
 data class GestureConfig(
     val tapLeft: GestureAction = GestureAction.PREV_PAGE,
@@ -64,8 +67,8 @@ data class GestureConfig(
             tapCenter = GestureAction.TOGGLE_MENU,
             doubleTap = GestureAction.ZOOM_TOGGLE,
             longPress = GestureAction.MAGNIFIER,
-            swipeLeft = GestureAction.NEXT_PAGE,
-            swipeRight = GestureAction.PREV_PAGE,
+            swipeLeft = GestureAction.PREV_PAGE,
+            swipeRight = GestureAction.NEXT_PAGE,
             presetName = "日漫模式"
         )
 
@@ -99,6 +102,20 @@ data class GestureConfig(
             "simple" to PRESET_SIMPLE
         )
     }
+}
+
+fun GestureConfig.presetKey(): String = when {
+    this == GestureConfig.PRESET_MANGA -> "manga"
+    this == GestureConfig.PRESET_COMIC -> "comic"
+    this == GestureConfig.PRESET_SIMPLE -> "simple"
+    else -> "custom"
+}
+
+fun GestureConfig.displayPresetName(context: Context): String = when (presetKey()) {
+    "manga" -> context.getString(R.string.gesture_preset_manga)
+    "comic" -> context.getString(R.string.gesture_preset_comic)
+    "simple" -> context.getString(R.string.gesture_preset_simple)
+    else -> presetName
 }
 
 /**

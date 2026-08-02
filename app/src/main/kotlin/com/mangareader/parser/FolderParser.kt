@@ -3,9 +3,11 @@ package com.mangareader.parser
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
+import com.mangareader.R
 import com.mangareader.data.ComicPage
 import com.mangareader.data.ComicType
 import com.mangareader.utils.FileListHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -68,14 +70,19 @@ class FolderParser : ComicParser {
             .sortedWith { a, b -> compareNames(a.name, b.name) }
 
         if (children.isEmpty()) {
-            return@withContext ParserResult.Error("该目录下没有图片文件")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_folder_no_images))
         }
+
+        // 根据屏幕分辨率计算下采样目标尺寸，避免文件夹内大扫描图直接原尺寸解码导致 OOM。
+        val metrics = context.resources.displayMetrics
+        val reqWidth = metrics.widthPixels
+        val reqHeight = metrics.heightPixels
 
         val pages = children.mapIndexed { idx, entry ->
             ComicPage(
                 index = idx,
                 name = entry.name,
-                load = { decodeBitmap(context, entry.uri) },
+                load = { decodeBitmap(context, entry.uri, reqWidth, reqHeight) },
                 loadStream = { context.contentResolver.openInputStream(entry.uri) }
             )
         }
@@ -83,14 +90,40 @@ class FolderParser : ComicParser {
         ParserResult.Success(pages, ComicType.FOLDER)
     }
 
-    private fun decodeBitmap(context: Context, uri: Uri): android.graphics.Bitmap? {
+    private fun decodeBitmap(
+        context: Context,
+        uri: Uri,
+        reqWidth: Int,
+        reqHeight: Int
+    ): android.graphics.Bitmap? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                BitmapFactory.decodeStream(input)
+                val bytes = input.readBytes()
+                if (bytes.isEmpty()) return null
+
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    .also { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
+                val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, reqWidth, reqHeight)
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             }
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
             null
         }
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int, reqWidth: Int, reqHeight: Int): Int {
+        if (width <= 0 || height <= 0 || reqWidth <= 0 || reqHeight <= 0) return 1
+        var inSampleSize = 1
+        while (width / inSampleSize >= reqWidth * 2 && height / inSampleSize >= reqHeight * 2) {
+            inSampleSize *= 2
+        }
+        return inSampleSize
     }
 
     private fun isImage(name: String): Boolean {

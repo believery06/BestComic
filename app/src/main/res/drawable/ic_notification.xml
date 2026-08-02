@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 通知栏小图标：纯白色、透明背景，适配 Android 8+ 的 Alpha 图标要求。 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M4,6h7v12H4z M13,6h7v12h-7z M11,6h2v12h-2z" />
+</vector>

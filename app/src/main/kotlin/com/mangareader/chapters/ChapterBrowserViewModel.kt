@@ -2,6 +2,8 @@ package com.mangareader.chapters
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mangareader.data.ComicChapter
@@ -12,56 +14,81 @@ import com.mangareader.parser.ComicParser
 import com.mangareader.parser.ComicBookParser
 import com.mangareader.parser.FolderParser
 import com.mangareader.parser.ParserFactory
+import com.mangareader.R
 import com.mangareader.parser.ParserResult
+import com.mangareader.parser.VolumeSortHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 class ChapterBrowserViewModel(application: Application) : AndroidViewModel(application) {
 
+    @Immutable
     data class UiState(
         val isLoading: Boolean = false,
         val title: String = "",
         val chapters: List<ComicChapter> = emptyList(),
-        val error: String? = null
+        val error: String? = null,
+        val continueAvailable: Boolean = false
     )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val settingsRepository by lazy { com.mangareader.data.SettingsRepository.getInstance(getApplication()) }
+
     private var parserRef: ComicParser? = null
 
+    companion object {
+        private const val TAG = "ChapterBrowserViewModel"
+        /** 缩略图源数据最大 20MB，防止异常大文件导致 OOM。 */
+        private const val MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024L
+    }
+
     fun load(entry: ComicEntry) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null, title = entry.title)
             try {
                 parserRef?.close()
                 parserRef = null
 
-                val (pages, parser) = resolvePages(entry)
+                val (pages, parser) = withContext(Dispatchers.IO) { resolvePages(entry) }
                 parserRef = parser
 
                 if (pages.isEmpty()) {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = "没有可识别的页面"
+                        error = getApplication<Application>().getString(R.string.chapter_browser_no_pages_error)
                     )
                     return@launch
                 }
 
-                val chapters = groupPagesIntoChapters(entry, pages)
+                val chapters = withContext(Dispatchers.IO) { groupPagesIntoChapters(entry, pages) }
+                val continueAvailable = settingsRepository.getProgress(entry.uri).first() > 0
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    chapters = chapters
+                    chapters = chapters,
+                    continueAvailable = continueAvailable
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "加载分卷失败", e)
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = "解析失败：${e.message ?: e.javaClass.simpleName}"
+                    error = getApplication<Application>().getString(
+                        R.string.chapter_browser_parse_error,
+                        e.message ?: e.javaClass.simpleName
+                    )
                 )
             }
         }
@@ -75,8 +102,9 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         withContext(Dispatchers.IO) {
             try {
                 page.loadStream()?.use { stream ->
-                    val bytes = stream.readBytes()
-                    if (bytes.isEmpty()) return@use null
+                    // 限制读取字节数，避免单页过大导致 OOM
+                    val bytes = stream.readBytesLimited(MAX_THUMBNAIL_BYTES)
+                    if (bytes == null || bytes.isEmpty()) return@use null
                     val boundsOptions = android.graphics.BitmapFactory.Options().apply {
                         inJustDecodeBounds = true
                     }
@@ -108,8 +136,10 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
                     }
                     scaled
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "加载分卷缩略图失败", e)
                 null
             }
         }
@@ -144,7 +174,7 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         if (!hasChapters) {
             return listOf(
                 ComicChapter(
-                    title = entry.title.ifEmpty { "全篇" },
+                    title = entry.title.ifEmpty { getApplication<Application>().getString(R.string.chapter_browser_whole_volume) },
                     uri = entry.uri,
                     type = entry.type,
                     pages = pages
@@ -181,7 +211,7 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         if (currentPages.isNotEmpty()) {
             result.add(
                 ComicChapter(
-                    title = currentTitle.ifEmpty { "未命名" },
+                    title = currentTitle.ifEmpty { getApplication<Application>().getString(R.string.chapter_browser_unnamed) },
                     uri = entry.uri,
                     type = entry.type,
                     pages = currentPages.mapIndexed { idx, p -> p.copy(index = idx) }
@@ -189,8 +219,8 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
             )
         }
 
-        // 按分卷名称自然排序，避免文件顺序导致分卷列表顺序混乱
-        return result.sortedWith { a, b -> FolderParser.compareNames(a.title, b.title) }
+        // 按分卷名称智能排序，识别卷号/Vol/番外等语义，避免文件顺序导致分卷列表顺序混乱
+        return result.sortedWith { a, b -> VolumeSortHelper.compareNames(a.title, b.title) }
     }
 
     override fun onCleared() {
@@ -198,4 +228,21 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         parserRef?.close()
         parserRef = null
     }
+}
+
+/**
+ * 读取 InputStream 内容并限制最大字节数，超过限制或协程取消时返回 null。
+ */
+private suspend fun InputStream.readBytesLimited(limit: Long): ByteArray? {
+    val buffer = ByteArrayOutputStream()
+    val temp = ByteArray(8192)
+    var total = 0L
+    while (currentCoroutineContext().isActive) {
+        val read = this.read(temp)
+        if (read <= 0) break
+        total += read
+        if (total > limit) return null
+        buffer.write(temp, 0, read)
+    }
+    return buffer.toByteArray()
 }

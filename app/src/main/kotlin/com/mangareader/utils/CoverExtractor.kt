@@ -9,12 +9,18 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.mangareader.data.ComicType
-import com.mangareader.parser.ParserFactory
+import com.mangareader.utils.BitmapDecoderUtils
+import com.mangareader.utils.isImageFile
+import com.mangareader.utils.readBytesLimited
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.ZipInputStream
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 
 /**
  * Extracts a cover thumbnail from the first page of a chapter file.
@@ -27,6 +33,9 @@ object CoverExtractor {
 
     private const val TAG = "CoverExtractor"
     private const val THUMB_MAX_SIZE = 480
+    private const val MAX_COVER_CACHE_FILES = 200
+    /** 封面源文件单条目上限 50MB，防止恶意或损坏归档中的超大首图导致 OOM。 */
+    private const val MAX_COVER_ENTRY_BYTES = 50L * 1024 * 1024
 
     /**
      * Extract a cover thumbnail from the given file. Returns a cached file
@@ -46,6 +55,7 @@ object CoverExtractor {
             ComicType.CBR -> extractRarFirstImage(context, uri)
             ComicType.CB7 -> extractSevenZipFirstImage(context, uri)
             ComicType.CBT -> extractTarFirstImage(context, uri)
+            ComicType.MOBI -> extractMobiFirstImage(context, uri)
             else -> null
         } ?: return@withContext null
 
@@ -57,7 +67,24 @@ object CoverExtractor {
         }
         thumb.recycle()
 
-        if (cacheFile.exists()) Uri.fromFile(cacheFile) else null
+        if (cacheFile.exists()) {
+            cleanupOldCovers(context)
+            Uri.fromFile(cacheFile)
+        } else null
+    }
+
+    /**
+     * 封面缩略图数量超过上限时，按修改时间删除最旧的文件。
+     */
+    private fun cleanupOldCovers(context: Context) {
+        val files = context.cacheDir.listFiles { _, name ->
+            name.startsWith("thumb_") && name.endsWith(".png")
+        } ?: return
+        if (files.size > MAX_COVER_CACHE_FILES) {
+            files.sortedBy { it.lastModified() }
+                .take(files.size - MAX_COVER_CACHE_FILES)
+                .forEach { runCatching { it.delete() } }
+        }
     }
 
     // ── PDF ──────────────────────────────────────────────────────────────
@@ -65,6 +92,7 @@ object CoverExtractor {
     private fun extractPdfFirstPage(context: Context, uri: Uri): Bitmap? {
         var pfd: ParcelFileDescriptor? = null
         var renderer: PdfRenderer? = null
+        var bmp: Bitmap? = null
         return try {
             pfd = context.contentResolver.openFileDescriptor(uri, "r")
                 ?: throw IllegalStateException("Cannot open PDF")
@@ -73,17 +101,23 @@ object CoverExtractor {
             renderer.openPage(0).use { page ->
                 val scale = (THUMB_MAX_SIZE.toFloat() / maxOf(page.width, page.height)).coerceAtMost(1f)
                 // Android 新版 PdfRenderer.render 只接受 ARGB_8888
-                val bmp = Bitmap.createBitmap(
+                val rendered = Bitmap.createBitmap(
                     (page.width * scale).toInt().coerceAtLeast(1),
                     (page.height * scale).toInt().coerceAtLeast(1),
                     Bitmap.Config.ARGB_8888
                 )
-                val canvas = android.graphics.Canvas(bmp)
+                bmp = rendered
+                val canvas = android.graphics.Canvas(rendered)
                 canvas.drawColor(Color.WHITE)
-                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                bmp
+                page.render(rendered, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             }
+            bmp
+        } catch (e: OutOfMemoryError) {
+            bmp?.takeIf { !it.isRecycled }?.recycle()
+            Log.e(TAG, "extractPdfFirstPage OOM: $uri", e)
+            null
         } catch (e: Exception) {
+            bmp?.takeIf { !it.isRecycled }?.recycle()
             Log.w(TAG, "extractPdfFirstPage failed: $uri", e)
             null
         } finally {
@@ -96,27 +130,205 @@ object CoverExtractor {
 
     private fun extractEpubFirstImage(context: Context, uri: Uri): Bitmap? {
         return try {
+            val coverHref = resolveEpubCoverHref(context, uri)
+            if (coverHref != null) {
+                decodeEpubEntry(context, uri, coverHref)?.let { return it }
+            }
+            // Fallback：按自然排序读取第一张图片，按缩略图尺寸降采样，避免大图 OOM。
             context.contentResolver.openInputStream(uri)?.use { input ->
                 ZipInputStream(input).use { zip ->
-                    // 顺序读取，找到第一张图片立即停止，避免读完整个 EPUB
-                    val found = mutableListOf<Pair<String, ByteArray>>()
                     var entry = zip.nextEntry
                     while (entry != null) {
                         val name = entry.name.lowercase()
                         if (isImageExt(name)) {
-                            found.add(entry.name to zip.readBytes())
-                            break
+                            return decodeSampled(zip, THUMB_MAX_SIZE, THUMB_MAX_SIZE)
                         }
                         entry = zip.nextEntry
                     }
-                    found.firstOrNull()?.let { (_, data) ->
-                        BitmapFactory.decodeByteArray(data, 0, data.size)
-                    }
+                    null
                 }
             }
         } catch (e: Exception) {
+            Log.w(TAG, "extractEpubFirstImage failed: $uri", e)
             null
         }
+    }
+
+    /**
+     * 解析 EPUB 结构，尝试获取封面图片在压缩包内的路径。
+     * 优先识别 OPF manifest 中 properties="cover-image" 的 item，
+     * 其次识别 metadata 中 <meta name="cover" content="id"/> 引用的 item。
+     */
+    private fun resolveEpubCoverHref(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                ZipInputStream(input).use zip@ { zip ->
+                    var containerBytes: ByteArray? = null
+                    var opfBytes: ByteArray? = null
+                    var firstOpfPath = ""
+                    var opfDir = ""
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        when (entry.name.lowercase()) {
+                            "meta-inf/container.xml" -> containerBytes = zip.readBytes()
+                            else -> {
+                                if (opfBytes == null && entry.name.lowercase().endsWith(".opf")) {
+                                    opfBytes = zip.readBytes()
+                                    firstOpfPath = entry.name
+                                    opfDir = entry.name.substringBeforeLast('/', "")
+                                }
+                            }
+                        }
+                        if (containerBytes != null && opfBytes != null) break
+                        entry = zip.nextEntry
+                    }
+
+                    val opfPathFromContainer = containerBytes?.let { parseRootfilePath(ByteArrayInputStream(it)) }
+                    // 优先使用 container.xml 指定的 OPF 路径；若第一次遍历到的不是该路径，则二次遍历
+                    val needExactOpf = opfPathFromContainer != null &&
+                            !firstOpfPath.equals(opfPathFromContainer, ignoreCase = true)
+
+                    var opfBytesFinal: ByteArray? = opfBytes
+                    var opfDirFinal = opfDir
+                    if (needExactOpf) {
+                        // 抽取局部不可变引用，消除 lambda 内对可空变量的 !! 强转。
+                        val exactOpfPath = opfPathFromContainer ?: return@zip null
+                        context.contentResolver.openInputStream(uri)?.use { second ->
+                            ZipInputStream(second).use { zip2 ->
+                                var e2 = zip2.nextEntry
+                                while (e2 != null) {
+                                    if (e2.name.equals(exactOpfPath, ignoreCase = true)) {
+                                        opfBytesFinal = zip2.readBytes()
+                                        opfDirFinal = exactOpfPath.substringBeforeLast('/', "")
+                                        break
+                                    }
+                                    e2 = zip2.nextEntry
+                                }
+                            }
+                        }
+                    }
+
+                    opfBytesFinal ?: return@zip null
+                    val (idToHref, propertiesToHref) = parseOpfManifest(ByteArrayInputStream(opfBytesFinal))
+                    propertiesToHref["cover-image"]?.firstOrNull()?.let { href ->
+                        return@zip resolveOpfHref(opfDirFinal, href)
+                    }
+                    val coverId = parseCoverMeta(ByteArrayInputStream(opfBytesFinal))
+                    coverId?.let { idToHref[it] }?.let { href ->
+                        return@zip resolveOpfHref(opfDirFinal, href)
+                    }
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveEpubCoverHref failed: $uri", e)
+            null
+        }
+    }
+
+    private fun decodeEpubEntry(context: Context, uri: Uri, href: String): Bitmap? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                ZipInputStream(input).use zip@ { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (entry.name.equals(href, ignoreCase = true)) {
+                            return@zip decodeSampled(zip, THUMB_MAX_SIZE, THUMB_MAX_SIZE)
+                        }
+                        entry = zip.nextEntry
+                    }
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "decodeEpubEntry failed: $uri / $href", e)
+            null
+        }
+    }
+
+    private fun parseRootfilePath(input: InputStream): String? {
+        return try {
+            val factory = XmlPullParserFactory.newInstance()
+            val parser = factory.newPullParser()
+            parser.setInput(input, "UTF-8")
+            var event = parser.eventType
+            while (event != XmlPullParser.END_DOCUMENT) {
+                if (event == XmlPullParser.START_TAG && parser.name == "rootfile") {
+                    return parser.getAttributeValue(null, "full-path")
+                }
+                event = parser.next()
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private data class ManifestResult(
+        val idToHref: Map<String, String>,
+        val propertiesToHref: Map<String, List<String>>
+    )
+
+    private fun parseOpfManifest(input: InputStream): ManifestResult {
+        val idToHref = mutableMapOf<String, String>()
+        val propertiesToHref = mutableMapOf<String, MutableList<String>>()
+        return try {
+            val factory = XmlPullParserFactory.newInstance()
+            val parser = factory.newPullParser()
+            parser.setInput(input, "UTF-8")
+            var event = parser.eventType
+            var inManifest = false
+            while (event != XmlPullParser.END_DOCUMENT) {
+                if (event == XmlPullParser.START_TAG && parser.name == "manifest") {
+                    inManifest = true
+                } else if (event == XmlPullParser.END_TAG && parser.name == "manifest") {
+                    inManifest = false
+                } else if (inManifest && event == XmlPullParser.START_TAG && parser.name == "item") {
+                    val id = parser.getAttributeValue(null, "id") ?: continue
+                    val href = parser.getAttributeValue(null, "href") ?: continue
+                    val props = parser.getAttributeValue(null, "properties") ?: ""
+                    idToHref[id] = href
+                    props.split(" ").filter { it.isNotBlank() }.forEach { prop ->
+                        propertiesToHref.getOrPut(prop) { mutableListOf() }.add(href)
+                    }
+                }
+                event = parser.next()
+            }
+            ManifestResult(idToHref, propertiesToHref)
+        } catch (_: Exception) {
+            ManifestResult(emptyMap(), emptyMap())
+        }
+    }
+
+    private fun parseCoverMeta(input: InputStream): String? {
+        return try {
+            val factory = XmlPullParserFactory.newInstance()
+            val parser = factory.newPullParser()
+            parser.setInput(input, "UTF-8")
+            var event = parser.eventType
+            var inMetadata = false
+            while (event != XmlPullParser.END_DOCUMENT) {
+                if (event == XmlPullParser.START_TAG && parser.name == "metadata") {
+                    inMetadata = true
+                } else if (event == XmlPullParser.END_TAG && parser.name == "metadata") {
+                    inMetadata = false
+                } else if (inMetadata && event == XmlPullParser.START_TAG && parser.name == "meta") {
+                    val name = parser.getAttributeValue(null, "name")
+                    val content = parser.getAttributeValue(null, "content")
+                    if (name.equals("cover", ignoreCase = true) && !content.isNullOrBlank()) {
+                        return content
+                    }
+                }
+                event = parser.next()
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun resolveOpfHref(opfDir: String, href: String): String {
+        return if (opfDir.isEmpty()) href else "$opfDir/$href"
     }
 
     // ── CBZ / ZIP ────────────────────────────────────────────────────────
@@ -124,13 +336,12 @@ object CoverExtractor {
     private fun extractZipFirstImage(context: Context, uri: Uri): Bitmap? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                ZipInputStream(input).use { zip ->
-                    // 顺序读取，找到第一张图片立即停止，避免读完整个压缩包
+                ZipInputStream(input).use zipUse@ { zip ->
+                    // 顺序读取，找到第一张图片立即停止，避免读完整个压缩包；同时按缩略图尺寸降采样。
                     var entry = zip.nextEntry
                     while (entry != null) {
                         if (!entry.isDirectory && isImageExt(entry.name.lowercase())) {
-                            val data = zip.readBytes()
-                            return@use BitmapFactory.decodeByteArray(data, 0, data.size)
+                            return@zipUse decodeSampled(zip, THUMB_MAX_SIZE, THUMB_MAX_SIZE)
                         }
                         entry = zip.nextEntry
                     }
@@ -146,27 +357,30 @@ object CoverExtractor {
 
     private fun extractRarFirstImage(context: Context, uri: Uri): Bitmap? {
         var archive: com.github.junrar.Archive? = null
+        var input: InputStream? = null
         return try {
-            archive = com.github.junrar.Archive(
-                context.contentResolver.openInputStream(uri) ?: return null
-            )
+            input = context.contentResolver.openInputStream(uri) ?: return null
+            archive = com.github.junrar.Archive(input)
+            input = null // Archive 接管流的关闭
 
             val entries = archive.fileHeaders.sortedBy { it.fileName.lowercase() }
             for (entry in entries) {
                 if (entry.isDirectory) continue
                 if (!isImageExt(entry.fileName.lowercase())) continue
-                return archive.getInputStream(entry).use(BitmapFactory::decodeStream)
+                return archive.getInputStream(entry).use { decodeSampled(it, THUMB_MAX_SIZE, THUMB_MAX_SIZE) }
             }
             null
         } catch (e: Exception) {
             null
         } finally {
             runCatching { archive?.close() }
+            runCatching { input?.close() }
         }
     }
 
     // ── CB7 / 7Z ─────────────────────────────────────────────────────────
 
+    @Suppress("DEPRECATION")
     private fun extractSevenZipFirstImage(context: Context, uri: Uri): Bitmap? {
         var pfd: ParcelFileDescriptor? = null
         var input: java.io.FileInputStream? = null
@@ -184,7 +398,7 @@ object CoverExtractor {
                 }
                 entries.sortBy { it.name.lowercase() }
                 val target = entries.firstOrNull() ?: return null
-                sz.getInputStream(target).use(BitmapFactory::decodeStream)
+                sz.getInputStream(target).use { decodeSampled(it, THUMB_MAX_SIZE, THUMB_MAX_SIZE) }
             }
         } catch (e: Exception) {
             null
@@ -199,12 +413,12 @@ object CoverExtractor {
     private fun extractTarFirstImage(context: Context, uri: Uri): Bitmap? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                org.apache.commons.compress.archivers.tar.TarArchiveInputStream(input).use { tar ->
-                    // 顺序读取，找到第一张图片立即停止
+                org.apache.commons.compress.archivers.tar.TarArchiveInputStream(input).use tarUse@ { tar ->
+                    // 顺序读取，找到第一张图片立即停止，按缩略图尺寸降采样。
                     var entry = tar.nextEntry
                     while (entry != null) {
                         if (!entry.isDirectory && isImageExt(entry.name.lowercase())) {
-                            return@use BitmapFactory.decodeStream(tar)
+                            return@tarUse decodeSampled(tar, THUMB_MAX_SIZE, THUMB_MAX_SIZE)
                         }
                         entry = tar.nextEntry
                     }
@@ -216,7 +430,148 @@ object CoverExtractor {
         }
     }
 
+    // ── MOBI / AZW3 ──────────────────────────────────────────────────────
+
+    /**
+     * 从 MOBI/AZW3 文件提取首张图片作为封面。
+     * 解析 PDB 头部和 MOBI 头部定位图片 record，读取第一张图片解码。
+     */
+    private fun extractMobiFirstImage(context: Context, uri: Uri): Bitmap? {
+        var raf: java.io.RandomAccessFile? = null
+        var tempFile: File? = null
+        return try {
+            val file: File = if (uri.scheme == "file") {
+                uri.path?.let(::File)?.takeIf(File::exists) ?: return null
+            } else {
+                val temp = File(context.cacheDir, "mobi_thumb_${System.currentTimeMillis()}.mobi")
+                tempFile = temp
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(temp).use { output -> input.copyTo(output) }
+                } ?: return null
+                temp
+            }
+
+            raf = java.io.RandomAccessFile(file, "r")
+
+            // 解析 PDB 头部
+            val headerBytes = ByteArray(78)
+            raf.seek(0)
+            raf.readFully(headerBytes)
+            val numRecords = ((headerBytes[76].toInt() and 0xFF) shl 8) or (headerBytes[77].toInt() and 0xFF)
+            if (numRecords <= 0 || numRecords > 65535) return null
+
+            val infoBytes = ByteArray(numRecords * 8)
+            raf.seek(78)
+            raf.readFully(infoBytes)
+
+            val offsets = LongArray(numRecords)
+            for (i in 0 until numRecords) {
+                val base = i * 8
+                offsets[i] = ((infoBytes[base].toLong() and 0xFF) shl 24) or
+                        ((infoBytes[base + 1].toLong() and 0xFF) shl 16) or
+                        ((infoBytes[base + 2].toLong() and 0xFF) shl 8) or
+                        (infoBytes[base + 3].toLong() and 0xFF)
+            }
+
+            val fileLength = raf.length()
+
+            // 扫描全部 records 寻找第一张图片
+            // 不依赖 firstImageIndex，直接用 magic bytes 检测
+            // 同时检查偏移 0/1/2/4 处，兼容对齐填充
+            val probeSize = 16
+            val probeBuf = ByteArray(probeSize)
+
+            for (i in 0 until numRecords) {
+                val recordOffset = offsets[i]
+                val nextOffset = if (i + 1 < numRecords) offsets[i + 1] else fileLength
+                val recordSize = nextOffset - recordOffset
+                if (recordSize < 4 || recordSize > MAX_COVER_ENTRY_BYTES) continue
+
+                raf.seek(recordOffset)
+                val read = raf.read(probeBuf)
+                if (read < 3) continue
+
+                // 在偏移 0 到 4 范围内检查图片 magic bytes
+                var imagePadding = -1
+                for (padding in 0..4) {
+                    if (padding + 3 > read) break
+                    if (isImageMagic(probeBuf, padding, read)) {
+                        imagePadding = padding
+                        break
+                    }
+                }
+                if (imagePadding < 0) continue
+
+                // 读取图片数据并解码
+                val imageOffset = recordOffset + imagePadding
+                val imageSize = recordSize - imagePadding
+                val readSize = minOf(imageSize, MAX_COVER_ENTRY_BYTES).toInt()
+                val imgBytes = ByteArray(readSize)
+                raf.seek(imageOffset)
+                raf.readFully(imgBytes)
+                return BitmapDecoderUtils.decodeSampled(imgBytes, THUMB_MAX_SIZE, THUMB_MAX_SIZE, tag = TAG)
+            }
+
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "extractMobiFirstImage failed: $uri", e)
+            null
+        } finally {
+            runCatching { raf?.close() }
+            tempFile?.let { runCatching { it.delete() } }
+        }
+    }
+
+    /**
+     * 检查缓冲区指定偏移处是否为图片 magic bytes。
+     * 支持 JPEG / PNG / GIF / BMP / WebP。
+     */
+    private fun isImageMagic(buf: ByteArray, offset: Int, limit: Int): Boolean {
+        val remaining = limit - offset
+        if (remaining < 2) return false
+        val b0 = buf[offset].toInt() and 0xFF
+        val b1 = buf[offset + 1].toInt() and 0xFF
+
+        // JPEG: FF D8 FF
+        if (remaining >= 3 && b0 == 0xFF && b1 == 0xD8 && (buf[offset + 2].toInt() and 0xFF) == 0xFF) return true
+        // PNG: 89 50 4E 47
+        if (remaining >= 4 && b0 == 0x89 && b1 == 0x50 &&
+            (buf[offset + 2].toInt() and 0xFF) == 0x4E && (buf[offset + 3].toInt() and 0xFF) == 0x47) return true
+        // GIF: 47 49 46 38
+        if (remaining >= 4 && b0 == 0x47 && b1 == 0x49 &&
+            (buf[offset + 2].toInt() and 0xFF) == 0x46 && (buf[offset + 3].toInt() and 0xFF) == 0x38) return true
+        // BMP: 42 4D
+        if (remaining >= 2 && b0 == 0x42 && b1 == 0x4D) return true
+        // WebP: 52 49 46 46 .... 57 45 42 50
+        if (remaining >= 12 && b0 == 0x52 && b1 == 0x49 &&
+            (buf[offset + 2].toInt() and 0xFF) == 0x46 && (buf[offset + 3].toInt() and 0xFF) == 0x46 &&
+            (buf[offset + 8].toInt() and 0xFF) == 0x57 && (buf[offset + 9].toInt() and 0xFF) == 0x45 &&
+            (buf[offset + 10].toInt() and 0xFF) == 0x42 && (buf[offset + 11].toInt() and 0xFF) == 0x50) return true
+
+        return false
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
+
+    /**
+     * 从输入流按目标尺寸采样解码，避免封面原图过大导致 OOM。
+     * 读取完成后不会关闭输入流，由调用方管理。
+     */
+    private fun decodeSampled(input: InputStream, reqWidth: Int, reqHeight: Int): Bitmap? {
+        return try {
+            val bytes = input.readBytesLimited(MAX_COVER_ENTRY_BYTES)
+            BitmapDecoderUtils.decodeSampled(bytes, reqWidth, reqHeight, tag = TAG)
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "decodeSampled OOM", e)
+            null
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "decodeSampled 单张封面超过 ${MAX_COVER_ENTRY_BYTES / 1024 / 1024}MB 上限", e)
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "decodeSampled failed", e)
+            null
+        }
+    }
 
     private fun safeCacheKey(input: String): String {
         val digest = java.security.MessageDigest.getInstance("MD5")
@@ -225,7 +580,7 @@ object CoverExtractor {
     }
 
     private fun isImageExt(name: String): Boolean {
-        return ParserFactory.isImageFile(name)
+        return isImageFile(name)
     }
 
     private fun scaleDown(src: Bitmap, maxSize: Int): Bitmap {
@@ -252,7 +607,7 @@ object CoverExtractor {
             }
 
             val bitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)
+                decodeSampled(stream, maxDimension, maxDimension)
             } ?: return null
 
             val thumb = scaleDown(bitmap, maxDimension)
@@ -264,6 +619,9 @@ object CoverExtractor {
             thumb.recycle()
 
             if (cacheFile.exists()) Uri.fromFile(cacheFile) else null
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "extractLocalImageThumbnail OOM: $uri", e)
+            null
         } catch (e: Exception) {
             Log.w(TAG, "extractLocalImageThumbnail failed: $uri", e)
             null

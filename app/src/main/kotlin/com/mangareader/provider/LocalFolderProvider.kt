@@ -4,11 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
+import com.mangareader.data.ComicProvider
 import com.mangareader.parser.FolderParser
 import com.mangareader.parser.ParserFactory
 import com.mangareader.utils.FileListHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.InputStream
 
 /**
  * 本地图片文件夹的原生 [ComicProvider] 实现。
@@ -35,33 +38,66 @@ class LocalFolderProvider(
     }
 
     override suspend fun getPage(index: Int): Bitmap? = withContext(Dispatchers.IO) {
-        decodeBitmap(index)
+        decodeSampledBitmap(index, DEFAULT_MAX_DIMENSION, DEFAULT_MAX_DIMENSION)
+    }
+
+    override suspend fun getPageStream(index: Int): InputStream? = withContext(Dispatchers.IO) {
+        entries.getOrNull(index)?.uri?.let { context.contentResolver.openInputStream(it) }
     }
 
     override suspend fun getThumbnail(index: Int, maxDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val raw = decodeBitmap(index) ?: return@withContext null
-        if (raw.isRecycled) return@withContext null
-        val scale = (maxDimension.toFloat() / maxOf(raw.width, raw.height)).coerceAtMost(1f)
-        val w = (raw.width * scale).toInt().coerceAtLeast(1)
-        val h = (raw.height * scale).toInt().coerceAtLeast(1)
-        val scaled = Bitmap.createScaledBitmap(raw, w, h, true)
-        if (scaled !== raw && !raw.isRecycled) {
-            runCatching { raw.recycle() }
-        }
-        scaled
+        decodeSampledBitmap(index, maxDimension, maxDimension)
     }
 
     override fun getPageName(index: Int): String = entries.getOrNull(index)?.name ?: ""
 
-    private fun decodeBitmap(index: Int): Bitmap? {
+    private fun decodeSampledBitmap(index: Int, reqWidth: Int, reqHeight: Int): Bitmap? {
         val entry = entries.getOrNull(index) ?: return null
         return try {
             context.contentResolver.openInputStream(entry.uri)?.use { input ->
-                BitmapFactory.decodeStream(input)
+                decodeSampled(input, reqWidth, reqHeight)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "加载本地图片失败", e)
             null
         }
+    }
+
+    private fun decodeSampled(input: InputStream, reqWidth: Int, reqHeight: Int): Bitmap? {
+        return try {
+            val bytes = input.use { it.readBytes() }
+            if (bytes.isEmpty()) return null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, reqWidth, reqHeight)
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        } catch (e: Exception) {
+            Log.e(TAG, "采样解码失败", e)
+            null
+        }
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int, reqWidth: Int, reqHeight: Int): Int {
+        if (width <= 0 || height <= 0 || reqWidth <= 0 || reqHeight <= 0) return 1
+        var inSampleSize = 1
+        var halfWidth = width
+        var halfHeight = height
+        while (halfWidth / 2 >= reqWidth && halfHeight / 2 >= reqHeight) {
+            halfWidth /= 2
+            halfHeight /= 2
+            inSampleSize *= 2
+        }
+        return inSampleSize
+    }
+
+    companion object {
+        private const val TAG = "LocalFolderProvider"
+        /** 默认按屏幕长边 1920px 采样，避免大图直接全分辨率加载导致 OOM。 */
+        private const val DEFAULT_MAX_DIMENSION = 1920
     }
 }

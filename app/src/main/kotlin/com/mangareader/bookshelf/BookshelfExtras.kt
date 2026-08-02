@@ -22,16 +22,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mangareader.Constants
+import com.mangareader.R
 import com.mangareader.data.*
 import com.mangareader.utils.WebDavConfig
 import com.mangareader.utils.WebDavConfigManager
 import com.mangareader.utils.WebDavSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @Composable
@@ -39,11 +44,11 @@ fun ContactAuthorDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.ContactMail, contentDescription = null) },
-        title = { Text("联系作者") },
+        icon = { Icon(Icons.Default.ContactMail, contentDescription = stringResource(R.string.bookshelf_contact_author)) },
+        title = { Text(stringResource(R.string.bookshelf_contact_author_title)) },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("作者联系方式：")
+                Text(stringResource(R.string.bookshelf_author_contact_label))
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     shape = MaterialTheme.shapes.medium,
@@ -62,12 +67,12 @@ fun ContactAuthorDialog(onDismiss: () -> Unit) {
         confirmButton = {
             TextButton(onClick = {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("作者联系方式", Constants.AUTHOR_CONTACT))
-                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-            }) { Text("复制") }
+                clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.bookshelf_author_contact_clip_label), Constants.AUTHOR_CONTACT))
+                Toast.makeText(context, context.getString(R.string.settings_contact_copied_toast), Toast.LENGTH_SHORT).show()
+            }) { Text(stringResource(R.string.bookshelf_copy_label)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 }
@@ -81,6 +86,7 @@ fun ReadingStatsDialog(
     lists: List<ReadingList>,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val started = progressMap.count { it.value.first > 0 }
     val finished = progressMap.count { it.value.second > 0 && it.value.first >= it.value.second - 1 }
     val totalPages = progressMap.values.sumOf { it.first.coerceAtLeast(0) } + stats.totalPagesRead
@@ -98,7 +104,7 @@ fun ReadingStatsDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("阅读统计与成就") },
+        title = { Text(stringResource(R.string.bookshelf_reading_stats_and_achievements)) },
         text = {
             Column(
                 modifier = Modifier
@@ -106,13 +112,13 @@ fun ReadingStatsDialog(
                     .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text("书架漫画：${comics.size} 本", style = MaterialTheme.typography.bodyLarge)
-                Text("已开始阅读：$started 本")
-                Text("已读完：$finished 本")
-                Text("累计翻页：$totalPages 页")
-                Text("连续阅读：${stats.streakDays()} 天")
+                Text(stringResource(R.string.bookshelf_total_comics, comics.size), style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.bookshelf_started_reading, started))
+                Text(stringResource(R.string.bookshelf_finished_reading, finished))
+                Text(stringResource(R.string.bookshelf_total_pages_flipped, totalPages))
+                Text(stringResource(R.string.bookshelf_streak_days, stats.streakDays()))
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("成就徽章", style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.bookshelf_achievement_badges), style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Achievement.entries.forEach { ach ->
@@ -120,23 +126,23 @@ fun ReadingStatsDialog(
                         FilterChip(
                             selected = isUnlocked,
                             onClick = {},
-                            label = { Text("${ach.iconEmoji} ${ach.title}") },
+                            label = { Text("${ach.iconEmoji} ${ach.displayTitle(context)}") },
                             enabled = false,
                             leadingIcon = if (isUnlocked) {
-                                { Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                                { Icon(Icons.Default.CheckCircle, contentDescription = stringResource(R.string.bookshelf_achievement_unlocked), modifier = Modifier.size(18.dp)) }
                             } else null
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "注：阅读时长、最爱作者/题材等需要云端服务或更复杂的本地埋点，当前版本仅统计翻页与完成数。",
+                    stringResource(R.string.bookshelf_stats_note),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 }
@@ -157,20 +163,20 @@ fun ReadingListsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("我的书单") },
+        title = { Text(stringResource(R.string.bookshelf_my_reading_lists)) },
         text = {
             Column(modifier = Modifier.heightIn(max = 420.dp)) {
                 if (lists.isEmpty()) {
-                    Text("还没有书单，点击右下角创建。")
+                    Text(stringResource(R.string.bookshelf_no_reading_lists))
                 }
                 LazyColumn {
                     items(lists, key = { it.id }) { list ->
                         ListItem(
                             headlineContent = { Text(list.name) },
-                            supportingContent = { Text("${list.items.size} 本 | ${list.description}") },
+                            supportingContent = { Text(stringResource(R.string.bookshelf_reading_list_items_format, list.items.size, list.description)) },
                             trailingContent = {
                                 IconButton(onClick = { selectedList = list }) {
-                                    Icon(Icons.Default.Add, contentDescription = "添加漫画")
+                                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.bookshelf_add_comic_to_list))
                                 }
                             },
                             modifier = Modifier.clickable { selectedList = list }
@@ -180,22 +186,22 @@ fun ReadingListsDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { showCreate = true }) { Text("新建") }
+            TextButton(onClick = { showCreate = true }) { Text(stringResource(R.string.bookshelf_create_label)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 
     if (showCreate) {
         AlertDialog(
             onDismissRequest = { showCreate = false },
-            title = { Text("新建书单") },
+            title = { Text(stringResource(R.string.bookshelf_create_list_title)) },
             text = {
                 Column {
-                    OutlinedTextField(value = newName, onValueChange = { newName = it }, label = { Text("书单名称") }, singleLine = true)
+                    OutlinedTextField(value = newName, onValueChange = { newName = it }, label = { Text(stringResource(R.string.bookshelf_list_name_label)) }, singleLine = true)
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = newDesc, onValueChange = { newDesc = it }, label = { Text("描述（可选）") }, singleLine = true)
+                    OutlinedTextField(value = newDesc, onValueChange = { newDesc = it }, label = { Text(stringResource(R.string.bookshelf_list_description_label)) }, singleLine = true)
                 }
             },
             confirmButton = {
@@ -209,10 +215,10 @@ fun ReadingListsDialog(
                         newDesc = ""
                         showCreate = false
                     }
-                }) { Text("创建") }
+                }) { Text(stringResource(R.string.bookshelf_create_button)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreate = false }) { Text("取消") }
+                TextButton(onClick = { showCreate = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -220,10 +226,10 @@ fun ReadingListsDialog(
     selectedList?.let { list ->
         AlertDialog(
             onDismissRequest = { selectedList = null },
-            title = { Text("添加到：${list.name}") },
+            title = { Text(stringResource(R.string.bookshelf_add_to_list_title, list.name)) },
             text = {
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                    items(comics) { comic ->
+                    items(comics, key = { it.uri.toString() }) { comic ->
                         val already = list.items.any { it.uriString == comic.uri.toString() }
                         TextButton(
                             onClick = {
@@ -235,13 +241,13 @@ fun ReadingListsDialog(
                             enabled = !already,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(if (already) "✓ ${comic.title}" else comic.title)
+                            Text(if (already) stringResource(R.string.bookshelf_already_added, comic.title) else comic.title)
                         }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { selectedList = null }) { Text("关闭") }
+                TextButton(onClick = { selectedList = null }) { Text(stringResource(R.string.bookshelf_close_label)) }
             }
         )
     }
@@ -258,17 +264,99 @@ fun WebDavSyncDialog(
     val manager = remember { WebDavConfigManager(context) }
     var config by remember { mutableStateOf(manager.getConfig()) }
     var status by remember { mutableStateOf("") }
+    var isSyncing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    suspend fun applyMergedData(merged: com.mangareader.utils.SyncData) {
+        val repo = SettingsRepository.getInstance(context)
+        for ((uri, page) in merged.progress) {
+            runCatching {
+                val u = android.net.Uri.parse(uri)
+                repo.saveProgress(u, page)
+                merged.totalPages[uri]?.let { repo.saveTotalPages(u, it) }
+            }
+        }
+        for ((uri, pages) in merged.bookmarks) {
+            runCatching {
+                val u = android.net.Uri.parse(uri)
+                pages.forEach { repo.addBookmark(u, it) }
+            }
+        }
+        val currentFavorites = repo.getFavorites().first()
+        val toAdd = merged.favorites subtract currentFavorites
+        for (uri in toAdd) {
+            runCatching { repo.toggleFavorite(android.net.Uri.parse(uri)) }
+        }
+    }
+
+    fun doSync(directionKey: String) {
+        if (isSyncing) return
+        isSyncing = true
+        manager.saveConfig(config)
+        scope.launch(Dispatchers.IO) {
+            val repo = SettingsRepository.getInstance(context)
+            val directionLabel = when (directionKey) {
+                "upload" -> context.getString(R.string.bookshelf_webdav_upload)
+                "download" -> context.getString(R.string.bookshelf_webdav_download)
+                "bidirectional" -> context.getString(R.string.bookshelf_webdav_bidirectional)
+                else -> context.getString(R.string.bookshelf_webdav_unknown_direction)
+            }
+            status = context.getString(R.string.bookshelf_webdav_syncing_prefix, directionLabel)
+            val progressTimes = try {
+                repo.getRecentReads().first()
+            } catch (_: Exception) {
+                emptyMap<String, Long>()
+            }
+            val local = com.mangareader.utils.SyncData(
+                progress = progressMap.mapValues { it.value.first },
+                totalPages = progressMap.mapValues { it.value.second },
+                bookmarks = bookmarks,
+                favorites = favorites,
+                progressTimes = progressTimes
+            )
+            val result = when (directionKey) {
+                "upload" -> WebDavSync.uploadSyncData(
+                    config,
+                    local.progress,
+                    local.totalPages,
+                    local.bookmarks,
+                    local.favorites
+                )
+                "download" -> WebDavSync.downloadSyncData(config).map { remote ->
+                    applyMergedData(remote)
+                    Unit
+                }
+                "bidirectional" -> WebDavSync.downloadSyncData(config).map { remote ->
+                    val merged = WebDavSync.mergeSyncData(local, remote)
+                    applyMergedData(merged)
+                    WebDavSync.uploadSyncData(
+                        config,
+                        merged.progress,
+                        merged.totalPages,
+                        merged.bookmarks,
+                        merged.favorites,
+                        merged.progressTimes
+                    )
+                }.map { }
+                else -> Result.failure(Exception(context.getString(R.string.bookshelf_webdav_unknown_direction)))
+            }
+            status = result.fold(
+                onSuccess = { context.getString(R.string.bookshelf_webdav_result_success, directionLabel) },
+                onFailure = { context.getString(R.string.bookshelf_webdav_result_failure, it.message ?: "") }
+            )
+            isSyncing = false
+        }
+    }
+
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("WebDAV 同步") },
+        onDismissRequest = { if (!isSyncing) onDismiss() },
+        title = { Text(stringResource(R.string.bookshelf_webdav_sync_title)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = config.serverUrl,
                     onValueChange = { config = config.copy(serverUrl = it) },
-                    label = { Text("服务器地址") },
+                    label = { Text(stringResource(R.string.bookshelf_server_url_label)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -276,42 +364,101 @@ fun WebDavSyncDialog(
                 OutlinedTextField(
                     value = config.username,
                     onValueChange = { config = config.copy(username = it) },
-                    label = { Text("用户名") },
+                    label = { Text(stringResource(R.string.bookshelf_username_label)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+                var passwordVisible by remember { mutableStateOf(false) }
                 OutlinedTextField(
                     value = config.password,
                     onValueChange = { config = config.copy(password = it) },
-                    label = { Text("密码") },
+                    label = { Text(stringResource(R.string.bookshelf_password_label)) },
                     singleLine = true,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(icon, contentDescription = if (passwordVisible) stringResource(R.string.bookshelf_password_hide) else stringResource(R.string.bookshelf_password_show))
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                var intervalExpanded by remember { mutableStateOf(false) }
+                val intervalOptions = listOf(
+                    0 to stringResource(R.string.bookshelf_sync_manual),
+                    15 to stringResource(R.string.bookshelf_sync_15min),
+                    30 to stringResource(R.string.bookshelf_sync_30min),
+                    60 to stringResource(R.string.bookshelf_sync_hourly),
+                    360 to stringResource(R.string.bookshelf_sync_6hours),
+                    720 to stringResource(R.string.bookshelf_sync_12hours),
+                    1440 to stringResource(R.string.bookshelf_sync_daily)
+                )
+                ExposedDropdownMenuBox(
+                    expanded = intervalExpanded,
+                    onExpandedChange = { intervalExpanded = it },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = intervalOptions.find { it.first == config.syncInterval }?.second ?: stringResource(R.string.bookshelf_sync_manual),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.bookshelf_auto_sync_interval_label)) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = intervalExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = intervalExpanded,
+                        onDismissRequest = { intervalExpanded = false }
+                    ) {
+                        intervalOptions.forEach { (minutes, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    config = config.copy(syncInterval = minutes)
+                                    intervalExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(status, style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "支持 Nextcloud、坚果云、NAS 等 WebDAV 服务。同步内容：进度、书签、收藏。",
+                    stringResource(R.string.bookshelf_webdav_desc),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                manager.saveConfig(config)
-                scope.launch(Dispatchers.IO) {
-                    status = "正在测试连接..."
-                    val test = WebDavSync.testConnection(config)
-                    status = test.getOrElse { "连接失败：${it.message}" }
-                }
-            }) { Text("测试连接") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = {
+                        manager.saveConfig(config)
+                        scope.launch(Dispatchers.IO) {
+                            status = context.getString(R.string.bookshelf_webdav_testing)
+                            val test = WebDavSync.testConnection(config)
+                            status = test.getOrElse { context.getString(R.string.bookshelf_smb_connection_failed, it.message ?: "") }
+                        }
+                    },
+                    enabled = !isSyncing
+                ) { Text(stringResource(R.string.bookshelf_webdav_test_label)) }
+                TextButton(onClick = { doSync("upload") }, enabled = !isSyncing) { Text(stringResource(R.string.bookshelf_webdav_upload)) }
+                TextButton(onClick = { doSync("download") }, enabled = !isSyncing) { Text(stringResource(R.string.bookshelf_webdav_download)) }
+                TextButton(onClick = { doSync("bidirectional") }, enabled = !isSyncing) { Text(stringResource(R.string.bookshelf_webdav_bidirectional)) }
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss, enabled = !isSyncing) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 }
+
+
 
 @Composable
 fun ThemePickerDialog(
@@ -320,34 +467,34 @@ fun ThemePickerDialog(
     onApply: (backgroundColor: String, texture: BackgroundTexture) -> Unit,
     onDismiss: () -> Unit
 ) {
-    data class ThemePreset(val name: String, val color: String, val texture: BackgroundTexture)
+    data class ThemePreset(val nameRes: Int, val color: String, val texture: BackgroundTexture)
     val presets = listOf(
-        ThemePreset("默认黑", "#FF000000", BackgroundTexture.NONE),
-        ThemePreset("护眼纸", "#FFF5E6C8", BackgroundTexture.KRAFT),
-        ThemePreset("磨砂玻璃", "#FF1A1A2E", BackgroundTexture.GLASS),
-        ThemePreset("星空", "#FF050510", BackgroundTexture.STARS),
-        ThemePreset("木纹", "#FF3E2723", BackgroundTexture.WOOD)
+        ThemePreset(R.string.bookshelf_theme_default_black, "#FF000000", BackgroundTexture.NONE),
+        ThemePreset(R.string.bookshelf_theme_eye_care_paper, "#FFF5E6C8", BackgroundTexture.KRAFT),
+        ThemePreset(R.string.bookshelf_theme_frosted_glass, "#FF1A1A2E", BackgroundTexture.GLASS),
+        ThemePreset(R.string.bookshelf_theme_starry_sky, "#FF050510", BackgroundTexture.STARS),
+        ThemePreset(R.string.bookshelf_theme_wood, "#FF3E2723", BackgroundTexture.WOOD)
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("主题与阅读背景") },
+        title = { Text(stringResource(R.string.bookshelf_theme_picker_title)) },
         text = {
             Column {
-                Text("快速切换阅读背景主题。自定义图片背景需在阅读菜单中后续扩展。")
+                Text(stringResource(R.string.bookshelf_theme_picker_hint))
                 Spacer(modifier = Modifier.height(12.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     presets.forEach { preset ->
                         FilterChip(
                             selected = currentBackground == preset.color && currentTexture == preset.texture,
                             onClick = { onApply(preset.color, preset.texture) },
-                            label = { Text(preset.name) }
+                            label = { Text(stringResource(preset.nameRes)) }
                         )
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 }
@@ -368,23 +515,23 @@ fun ComicExtrasDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("评分与短评") },
+        title = { Text(stringResource(R.string.bookshelf_rating_and_review_title)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(comic.title, style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("评分：${rating.toInt()} / 5")
+                Text(stringResource(R.string.bookshelf_rating_label, rating.toInt()))
                 Slider(value = rating, onValueChange = { rating = it }, valueRange = 0f..5f, steps = 4)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = review,
                     onValueChange = { review = it },
-                    label = { Text("一句话短评") },
+                    label = { Text(stringResource(R.string.bookshelf_review_label)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("标签", style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.bookshelf_tags_label), style = MaterialTheme.typography.titleSmall)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     allTags.forEach { tag ->
                         val selected = tags.contains(tag)
@@ -401,14 +548,14 @@ fun ComicExtrasDialog(
                 OutlinedTextField(
                     value = tagInput,
                     onValueChange = { tagInput = it },
-                    label = { Text("新标签") },
+                    label = { Text(stringResource(R.string.bookshelf_new_tag_label)) },
                     singleLine = true,
                     trailingIcon = {
                         IconButton(onClick = {
                             val t = tagInput.trim()
                             if (t.isNotBlank() && !tags.contains(t)) tags.add(t)
                             tagInput = ""
-                        }) { Icon(Icons.Default.Add, contentDescription = "添加") }
+                        }) { Icon(Icons.Default.Add, contentDescription = stringResource(R.string.bookshelf_add_tag)) }
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -417,10 +564,10 @@ fun ComicExtrasDialog(
         confirmButton = {
             TextButton(onClick = {
                 onSave(ComicExtras(rating = rating, review = review.trim(), tags = tags.toSortedSet()))
-            }) { Text("保存") }
+            }) { Text(stringResource(R.string.bookshelf_save_label)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         }
     )
 }
@@ -446,50 +593,50 @@ fun SmbNasDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("SMB/NAS 流式阅读") },
+        title = { Text(stringResource(R.string.bookshelf_smb_nas_title)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("NAS HTTP 文件服务地址") },
-                    placeholder = { Text("http://192.168.1.100:5000/comics/") },
+                    label = { Text(stringResource(R.string.bookshelf_smb_nas_url_label)) },
+                    placeholder = { Text(stringResource(R.string.bookshelf_smb_nas_url_placeholder)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "提示：当前使用 HTTP 流式读取。若 NAS 仅提供 SMB，请在 NAS 上开启 WebDAV/HTTP 文件服务，或后续集成 jcifs-ng 库。",
+                    stringResource(R.string.bookshelf_smb_nas_hint),
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(status, style = MaterialTheme.typography.bodySmall)
                 if (files.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("远程目录（${files.size} 项）", style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.bookshelf_remote_directory, files.size), style = MaterialTheme.typography.titleSmall)
                     LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
-                        items(files) { file ->
+                        items(files, key = { it.url }) { file ->
                             ListItem(
                                 headlineContent = { Text(file.name) },
                                 supportingContent = {
                                     Text(
-                                        if (file.isDirectory) "目录"
-                                        else if (file.isComic) "漫画"
-                                        else "文件"
+                                        if (file.isDirectory) stringResource(R.string.bookshelf_remote_directory_type_folder)
+                                        else if (file.isComic) stringResource(R.string.bookshelf_remote_directory_type_comic)
+                                        else stringResource(R.string.bookshelf_remote_directory_type_file)
                                     )
                                 },
                                 modifier = Modifier.clickable {
                                     if (file.isDirectory) {
                                         scope.launch(Dispatchers.IO) {
-                                            status = "正在列出 ${file.name}..."
+                                            status = context.getString(R.string.bookshelf_smb_listing_prefix, file.name)
                                             files = com.mangareader.utils.SmbClient.listDirectory(file.url)
-                                            status = if (files.isEmpty()) "目录为空或无法访问" else ""
+                                            status = if (files.isEmpty()) context.getString(R.string.bookshelf_smb_empty_or_unreachable) else ""
                                         }
                                     } else if (file.isComic) {
                                         // 复制远程地址到剪贴板，用户可在外部下载后导入
                                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        clipboard.setPrimaryClip(ClipData.newPlainText("远程漫画地址", file.url))
-                                        Toast.makeText(context, "已复制地址：${file.name}", Toast.LENGTH_SHORT).show()
+                                        clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.bookshelf_remote_comic_address_clip_label), file.url))
+                                        Toast.makeText(context, context.getString(R.string.bookshelf_copied_address_toast, file.name), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )
@@ -502,17 +649,17 @@ fun SmbNasDialog(onDismiss: () -> Unit) {
             TextButton(onClick = {
                 prefs.edit().putString("smb_url", url).apply()
                 scope.launch(Dispatchers.IO) {
-                    status = "正在测试连接..."
+                    status = context.getString(R.string.bookshelf_smb_testing_connection)
                     val test = com.mangareader.utils.SmbClient.testConnection(url)
-                    status = test.getOrElse { "连接失败：${it.message}" }
+                    status = test.getOrElse { context.getString(R.string.bookshelf_smb_connection_failed, it.message ?: "") }
                     if (test.isSuccess) {
                         files = com.mangareader.utils.SmbClient.listDirectory(url)
                     }
                 }
-            }) { Text("测试/浏览") }
+            }) { Text(stringResource(R.string.bookshelf_smb_test_browse_label)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.bookshelf_close_label)) }
         }
     )
 }

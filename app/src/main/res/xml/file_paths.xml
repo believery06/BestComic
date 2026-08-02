@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path name="cache" path="." />
-    <files-path name="files" path="." />
+    <!-- 分享漫画源文件（content:// 源复制后的临时副本） -->
+    <cache-path name="source_share" path="source_share/" />
+    <!-- 分享卡片临时 PNG -->
+    <cache-path name="share_cards" path="share_cards/" />
+    <!-- 崩溃日志导出临时文件 -->
+    <cache-path name="crash_logs" path="crash_logs/" />
 </paths>

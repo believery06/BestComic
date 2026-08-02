@@ -4,44 +4,36 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 
 object OnboardingUtils {
 
     /**
-     * Returns true if the user has granted MANAGE_EXTERNAL_STORAGE on Android 11+.
-     * On lower API levels the app always has storage access through legacy paths.
+     * Android 11+ 使用 Storage Access Framework，不再请求 MANAGE_EXTERNAL_STORAGE。
+     * 低版本返回 READ_EXTERNAL_STORAGE 是否已授予。
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun hasManageAllFilesPermission(context: Context): Boolean {
+    fun hasStoragePermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
             true
+        } else {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
         }
     }
 
     /**
-     * Builds the intent that opens the system screen where the user can
-     * grant "All files access" to the app. We do NOT use ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
-     * because that only works on Android 11+; on Android 13+ Google also
-     * accepts ACTION_APPLICATION_DETAILS_SETTINGS as a fallback.
+     * 低版本跳转到应用详情页，用户可手动授予存储权限。
+     * Android 11+ 不再使用此 Intent，应改用 SAF 选择目录。
      */
-    fun buildManageAllFilesIntent(context: Context): Intent {
-        val packageName = context.packageName
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                data = Uri.fromParts("package", packageName, null)
-            }
-        } else {
-            // Fallback for older devices: open app details so the user can grant
-            // the legacy WRITE_EXTERNAL_STORAGE permission.
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts("package", packageName, null)
-            }
+    fun buildAppDetailsIntent(context: Context): Intent {
+        return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
         }
     }
 }

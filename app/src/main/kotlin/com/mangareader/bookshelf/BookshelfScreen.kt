@@ -1,17 +1,19 @@
-@file:OptIn(ExperimentalFoundationApi::class)
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 
 package com.mangareader.bookshelf
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -23,6 +25,8 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Help
@@ -30,64 +34,162 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.mangareader.R
+import com.mangareader.bookshelf.components.ComicCallbacks
+import com.mangareader.bookshelf.components.ComicListItem
+import com.mangareader.bookshelf.components.ComicCard
+import com.mangareader.bookshelf.components.DefaultCoverIcon
+import com.mangareader.bookshelf.components.EmptyBookshelf
+import com.mangareader.bookshelf.components.EmptyBookshelfState
+import com.mangareader.bookshelf.components.NewBadge
+import com.mangareader.bookshelf.components.SearchHistoryPanel
+import com.mangareader.data.BookshelfScanState
 import com.mangareader.data.ComicEntry
 import com.mangareader.data.ComicType
 import com.mangareader.data.ComicExtras
 import com.mangareader.data.ReaderSettings
 import com.mangareader.data.ReadingStats
 import com.mangareader.data.SettingsRepository
+import com.mangareader.ui.components.CoverAsyncImage
 import com.mangareader.utils.MetadataScraper
 import com.mangareader.utils.ComicMetadata
 import com.mangareader.utils.WindowSizeClass
 import com.mangareader.utils.rememberWindowSizeClass
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun BookshelfScreen(
     onOpenComic: (ComicEntry) -> Unit,
+    onOpenReader: (ComicEntry) -> Unit,
     onOpenBrowser: () -> Unit,
+    onShowHistory: () -> Unit = {},
     onShowHelpCallback: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     viewModel: BookshelfViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val settings = remember { SettingsRepository(context) }
-    val favorites by settings.getFavorites().collectAsStateWithLifecycle(initialValue = emptySet())
-    val categories by settings.getCategories().collectAsStateWithLifecycle(initialValue = emptyList())
-    val comicCategories by settings.getComicCategories().collectAsStateWithLifecycle(initialValue = emptyMap())
-    val bookmarksMap by settings.getBookmarks().collectAsStateWithLifecycle(initialValue = emptyMap())
-    val stats by settings.getReadingStats().collectAsStateWithLifecycle(initialValue = ReadingStats())
-    val extrasMap by settings.getAllComicExtras().collectAsStateWithLifecycle(initialValue = emptyMap())
-    val readingLists by settings.getReadingLists().collectAsStateWithLifecycle(initialValue = emptyList())
-    val readerSettings by settings.readerSettings.collectAsStateWithLifecycle(initialValue = ReaderSettings())
-    var filter by remember { mutableStateOf(BookshelfFilter.ALL) }
-    var sortBy by remember { mutableStateOf(BookshelfSort.NAME) }
-    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    val settings = remember { SettingsRepository.getInstance(context) }
+    val settingsState by viewModel.settingsState.collectAsStateWithLifecycle()
+    val favorites = settingsState.favorites
+    val categories = settingsState.categories
+    val comicCategories = settingsState.comicCategories
+    val bookmarksMap = settingsState.bookmarksMap
+    val stats = settingsState.stats
+    val extrasMap = settingsState.extrasMap
+    val readingLists = settingsState.readingLists
+    val readerSettings = settingsState.readerSettings
+    val progressMap by viewModel.progressMap.collectAsStateWithLifecycle()
+    val recentReads by viewModel.recentReads.collectAsStateWithLifecycle()
+    val newComicUris = uiState.newComicUris
+    var filter by rememberSaveable(stateSaver = BookshelfFilterSaver) { mutableStateOf(BookshelfFilter.ALL) }
+    var sortBy by rememberSaveable(stateSaver = BookshelfSortSaver) { mutableStateOf(BookshelfSort.NAME) }
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    val searchHistory by settings.getBookshelfSearchHistory()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // 搜索防抖：输入停止 500ms 后再执行过滤，避免大图书馆频繁重算
+    LaunchedEffect(searchQuery) {
+        delay(500)
+        debouncedSearchQuery = searchQuery
+    }
+    LaunchedEffect(searchQuery) {
+        settings.saveBookshelfSearchQuery(searchQuery)
+    }
+    LaunchedEffect(isSearching) {
+        settings.saveBookshelfSearching(isSearching)
+    }
+    var viewMode by rememberSaveable(stateSaver = BookshelfViewModeSaver) { mutableStateOf(BookshelfViewMode.GRID) }
+    // 书架状态持久化：rememberSaveable 处理配置变更，DataStore 处理进程重启。
+    LaunchedEffect(Unit) {
+        runCatching {
+            filter = BookshelfFilter.valueOf(settings.getBookshelfFilter().first())
+        }
+        runCatching {
+            sortBy = BookshelfSort.valueOf(settings.getBookshelfSort().first())
+        }
+        runCatching {
+            selectedCategory = settings.getBookshelfSelectedCategory().first()
+        }
+        runCatching {
+            val saved = settings.getBookshelfViewMode().first()
+            viewMode = runCatching { BookshelfViewMode.valueOf(saved) }.getOrDefault(viewMode)
+        }
+        runCatching {
+            searchQuery = settings.getBookshelfSearchQuery().first()
+        }
+        runCatching {
+            isSearching = settings.isBookshelfSearching().first()
+        }
+    }
+    LaunchedEffect(viewMode) {
+        settings.saveBookshelfViewMode(viewMode.name)
+    }
+    LaunchedEffect(filter) {
+        settings.saveBookshelfFilter(filter.name)
+    }
+    LaunchedEffect(sortBy) {
+        settings.saveBookshelfSort(sortBy.name)
+    }
+    LaunchedEffect(selectedCategory) {
+        settings.saveBookshelfSelectedCategory(selectedCategory)
+    }
+    // 若已保存的分类被删除，则自动清除，避免书架显示为空；
+    // 分类列表尚未加载时（为空）不执行清除，防止启动时丢失已保存的分类。
+    LaunchedEffect(categories, selectedCategory) {
+        if (selectedCategory != null && categories.isNotEmpty() && !categories.contains(selectedCategory)) {
+            selectedCategory = null
+        }
+    }
     var showCategoryDialog by remember { mutableStateOf(false) }
     var showComicCategoryDialog by remember { mutableStateOf(false) }
     var comicToCategorize by remember { mutableStateOf<ComicEntry?>(null) }
@@ -111,20 +213,34 @@ fun BookshelfScreen(
     var showTheme by remember { mutableStateOf(false) }
     var comicForExtras by remember { mutableStateOf<ComicEntry?>(null) }
 
+    // 多书架状态
+    val bookshelfUris = settingsState.bookshelfUris
+    val currentBookshelfIndex = settingsState.currentBookshelfIndex
+    val currentRootUriString = remember(uiState.rootUri) { uiState.rootUri?.toString() }
+    val scanState by produceState(initialValue = BookshelfScanState(), currentRootUriString) {
+        value = BookshelfScanState()
+        currentRootUriString?.let { root ->
+            settings.getBookshelfScanState(root).collect { value = it }
+        }
+    }
+    var showBookshelfSwitcher by remember { mutableStateOf(false) }
+
     // 批量选择模式
     var selectionMode by remember { mutableStateOf(false) }
     var selectedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<ComicEntry?>(null) }
 
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let {
-            context.contentResolver.takePersistableUriPermission(
-                it,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-            viewModel.setRoot(it)
+            // 书架需要持久读/写权限：后续支持批量重命名、删除等操作。
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(it, flags)
+            viewModel.addBookshelf(it)
         }
     }
 
@@ -134,33 +250,58 @@ fun BookshelfScreen(
         savedRootUriString = settings.getBookshelfRoot().first()
     }
 
-    val filteredComics = remember(uiState.comics, filter, favorites, uiState.progressMap, uiState.recentReads, selectedCategory, comicCategories, sortBy) {
-        when (filter) {
-            BookshelfFilter.ALL -> uiState.comics
-            BookshelfFilter.FAVORITES -> uiState.comics.filter { favorites.contains(it.uri.toString()) }
-            BookshelfFilter.UNREAD -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.UNREAD }
-            BookshelfFilter.READING -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.READING }
-            BookshelfFilter.READ -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.READ }
-        }
-    }.let { comics ->
-        // 按分类筛选
-        if (selectedCategory != null) {
-            comics.filter { comic ->
-                comicCategories[comic.uri.toString()]?.contains(selectedCategory) == true
+    // 应用回到前台时自动刷新书架，检测新加入的漫画文件
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.maybeAutoRefresh()
             }
-        } else comics
-    }.let { comics ->
-        when (sortBy) {
-            BookshelfSort.NAME -> comics.sortedBy { it.title.lowercase() }
-            BookshelfSort.RECENT -> comics.sortedByDescending { uiState.recentReads[it.uri.toString()] ?: 0L }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val filteredComics by remember {
+        derivedStateOf {
+            when (filter) {
+                BookshelfFilter.ALL -> uiState.comics
+                BookshelfFilter.FAVORITES -> uiState.comics.filter { favorites.contains(it.uri.toString()) }
+                BookshelfFilter.UNREAD -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.UNREAD }
+                BookshelfFilter.READING -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.READING }
+                BookshelfFilter.READ -> uiState.comics.filter { viewModel.getReadingStatus(it.uri) == com.mangareader.data.ReadingStatus.READ }
+                BookshelfFilter.NEW -> uiState.comics.filter { newComicUris.contains(it.uri.toString()) }
+            }.let { comics ->
+                if (selectedCategory != null) {
+                    comics.filter { comic ->
+                        comicCategories[comic.uri.toString()]?.contains(selectedCategory) == true
+                    }
+                } else comics
+            }.let { comics ->
+                if (debouncedSearchQuery.isNotBlank()) {
+                    val q = debouncedSearchQuery.trim().lowercase()
+                    comics.filter { it.title.lowercase().contains(q) }
+                } else comics
+            }.let { comics ->
+                when (sortBy) {
+                    BookshelfSort.NAME -> comics.sortedBy { it.title.lowercase() }
+                    BookshelfSort.RECENT -> comics.sortedByDescending { recentReads[it.uri.toString()] ?: 0L }
+                    BookshelfSort.PROGRESS -> comics.sortedByDescending {
+                        val (progress, total) = progressMap[it.uri.toString()] ?: (0 to 0)
+                        if (total > 0) progress.toFloat() / total else -1f
+                    }
+                }
+            }.distinctBy { it.uri.toString() } // 防御性去重，防止 LazyGrid 键重复崩溃
         }
     }
 
-    val recentComics = remember(filteredComics, uiState.recentReads) {
-        filteredComics
-            .filter { uiState.recentReads.containsKey(it.uri.toString()) }
-            .sortedByDescending { uiState.recentReads[it.uri.toString()] ?: 0L }
-            .take(10)
+    val recentComics by remember {
+        derivedStateOf {
+            uiState.comics
+                .filter { recentReads.containsKey(it.uri.toString()) }
+                .sortedByDescending { recentReads[it.uri.toString()] ?: 0L }
+                .take(10)
+        }
     }
 
     val isAtRoot = uiState.rootUri == null || uiState.currentUri == uiState.rootUri
@@ -170,25 +311,56 @@ fun BookshelfScreen(
                 "file" -> java.io.File(uri.path ?: "").name
                 else -> uri.lastPathSegment?.substringAfterLast('/')
             }
-        } ?: "书架"
+        } ?: ""
     }
 
-    // 拦截系统返回手势/按键：从子目录返回到上级书架，根目录时交给系统处理（退出应用）
-    BackHandler(enabled = !isAtRoot) {
-        viewModel.navigateUp()
+    // 拦截系统返回手势/按键：多选模式先清空选择，子目录返回上级书架，根目录时交给系统处理（退出应用）
+    BackHandler(enabled = selectionMode || !isAtRoot) {
+        if (selectionMode) {
+            selectedUris = emptySet()
+            selectionMode = false
+        } else {
+            viewModel.navigateUp()
+        }
     }
 
 
-    Scaffold(
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = {
                         Column {
-                            Text(if (isAtRoot) "书架" else currentName)
+                            if (isAtRoot) {
+                                val currentShelfName = bookshelfUris.getOrNull(currentBookshelfIndex)?.let { uri ->
+                                    runCatching { android.net.Uri.parse(uri).lastPathSegment?.substringAfterLast('/') }.getOrNull()
+                                } ?: stringResource(R.string.bookshelf_default_shelf_name)
+                                TextButton(
+                                    onClick = { showBookshelfSwitcher = true },
+                                    contentPadding = PaddingValues(horizontal = 0.dp)
+                                ) {
+                                    Text(currentShelfName, color = MaterialTheme.colorScheme.onSurface)
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = stringResource(R.string.bookshelf_switch_bookshelf),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                val scanHint = formatBookshelfScanTime(context, scanState.lastScanAt)
+                                if (scanHint.isNotBlank()) {
+                                    Text(
+                                        text = scanHint,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                Text(currentName.takeIf { it.isNotEmpty() } ?: stringResource(R.string.bookshelf_default_shelf_name))
+                            }
                             if (!isAtRoot) {
                                 Text(
-                                    text = uiState.pathStack.size.toString() + " 级",
+                                    text = stringResource(R.string.bookshelf_path_level, uiState.pathStack.size),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -198,25 +370,27 @@ fun BookshelfScreen(
                     navigationIcon = {
                         if (!isAtRoot) {
                             IconButton(onClick = { viewModel.navigateUp() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回上级")
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                             }
                         }
                     },
                 actions = {
-                    TextButton(onClick = onOpenBrowser) {
-                        Text("浏览器", color = MaterialTheme.colorScheme.primary)
+                    IconButton(onClick = { isSearching = !isSearching; if (!isSearching) searchQuery = "" }) {
+                        Icon(Icons.Default.Search, contentDescription = stringResource(R.string.action_search))
                     }
-                    IconButton(onClick = onShowHelpCallback) {
-                        Icon(Icons.AutoMirrored.Filled.Help, contentDescription = "使用说明")
-                    }
-                    IconButton(onClick = {
-                        val initialUri = savedRootUriString?.let { runCatching { Uri.parse(it) }.getOrNull() }
-                        folderLauncher.launch(initialUri)
-                    }) {
-                        Icon(Icons.Default.Add, contentDescription = "添加书架目录")
+                    IconButton(onClick = { viewMode = if (viewMode == BookshelfViewMode.GRID) BookshelfViewMode.LIST else BookshelfViewMode.GRID }) {
+                        val viewModeIcon = if (viewMode == BookshelfViewMode.GRID) {
+                            Icons.Default.Menu
+                        } else {
+                            Icons.Default.GridOn
+                        }
+                        Icon(
+                            imageVector = viewModeIcon,
+                            contentDescription = if (viewMode == BookshelfViewMode.GRID) stringResource(R.string.bookshelf_switch_list_view) else stringResource(R.string.bookshelf_switch_grid_view)
+                        )
                     }
                     IconButton(onClick = { showMoreMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多选项")
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.bookshelf_more_options))
                     }
                 }
             )
@@ -232,91 +406,233 @@ fun BookshelfScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .background(MaterialTheme.colorScheme.primaryContainer)
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("已选 ${selectedUris.size} 项", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.bookshelf_selected_count, selectedUris.size), modifier = Modifier.weight(1f))
                     TextButton(onClick = {
                         val uris = selectedUris.mapNotNull { str -> runCatching { Uri.parse(str) }.getOrNull() }
                         viewModel.markAsRead(uris)
-                        scope.launch { snackbarHostState.showSnackbar("已将 ${uris.size} 本漫画标为已读") }
+                        scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_marked_read_snackbar, uris.size)) }
                         selectionMode = false
                         selectedUris = emptySet()
-                    }) { Text("标已读") }
+                    }) { Text(stringResource(R.string.bookshelf_mark_read_label)) }
                     TextButton(onClick = {
                         val uris = selectedUris.mapNotNull { str -> runCatching { Uri.parse(str) }.getOrNull() }
                         viewModel.markAsUnread(uris)
-                        scope.launch { snackbarHostState.showSnackbar("已将 ${uris.size} 本漫画标为未读") }
+                        scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_marked_unread_snackbar, uris.size)) }
                         selectionMode = false
                         selectedUris = emptySet()
-                    }) { Text("标未读") }
+                    }) { Text(stringResource(R.string.bookshelf_mark_unread_label)) }
                     TextButton(onClick = {
                         val uris = selectedUris.mapNotNull { str -> runCatching { Uri.parse(str) }.getOrNull() }
                         scope.launch(Dispatchers.IO) {
                             for (uri in uris) {
                                 settings.toggleFavorite(uri)
                             }
-                            snackbarHostState.showSnackbar("已切换 ${uris.size} 本漫画的收藏状态")
+                            snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_toggled_favorite_snackbar, uris.size))
                         }
                         selectionMode = false
                         selectedUris = emptySet()
-                    }) { Text("收藏") }
+                    }) { Text(stringResource(R.string.bookshelf_favorite)) }
+                    TextButton(onClick = {
+                        val selectedEntries = uiState.comics.filter { selectedUris.contains(it.uri.toString()) }
+                        scope.launch(Dispatchers.IO) {
+                            val skipped = selectedUris.size - selectedEntries.count { !it.isDirectory }
+                            val shareUris = viewModel.prepareShareUris(selectedEntries)
+                            withContext(Dispatchers.Main) {
+                                if (shareUris.isNotEmpty()) {
+                                    shareComicFiles(context, shareUris)
+                                    if (skipped > 0) {
+                                        snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_share_skipped_snackbar, skipped))
+                                    }
+                                } else {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_share_empty))
+                                }
+                                selectionMode = false
+                                selectedUris = emptySet()
+                            }
+                        }
+                    }) { Text(stringResource(R.string.bookshelf_share_label)) }
                     if (categories.isNotEmpty()) {
                         TextButton(onClick = {
                             comicToCategorize = null
                             showComicCategoryDialog = true
-                        }) { Text("分类") }
+                        }) { Text(stringResource(R.string.bookshelf_categorize_label)) }
+                    }
+                    if (selectedUris.size == 1) {
+                        TextButton(onClick = {
+                            val uriString = selectedUris.firstOrNull()
+                            renameTarget = uiState.comics.find { it.uri.toString() == uriString }
+                            showRenameDialog = true
+                        }) { Text(stringResource(R.string.bookshelf_rename_label)) }
                     }
                     TextButton(onClick = {
                         showDeleteConfirm = true
-                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    }) { Text(stringResource(R.string.bookshelf_delete_label), color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = {
                         selectionMode = false
                         selectedUris = emptySet()
-                    }) { Text("取消") }
+                    }) { Text(stringResource(R.string.bookshelf_cancel_label)) }
                 }
             }
+            // 搜索栏
+            val focusManager = LocalFocusManager.current
+            AnimatedVisibility(visible = isSearching) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    placeholder = { Text(stringResource(R.string.bookshelf_search_hint)) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = stringResource(R.string.action_search)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.action_clear))
+                            }
+                        } else if (searchHistory.isNotEmpty()) {
+                            IconButton(onClick = { scope.launch { settings.clearBookshelfSearchHistory() } }) {
+                                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.bookshelf_search_history_clear))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            focusManager.clearFocus()
+                            val q = searchQuery.trim()
+                            if (q.isNotEmpty()) {
+                                scope.launch { settings.addBookshelfSearchHistory(q) }
+                            }
+                        }
+                    )
+                )
+            }
+            AnimatedVisibility(
+                visible = isSearching && searchQuery.isBlank() && searchHistory.isNotEmpty()
+            ) {
+                SearchHistoryPanel(
+                    history = searchHistory,
+                    onItemClick = { item ->
+                        searchQuery = item
+                        scope.launch { settings.addBookshelfSearchHistory(item) }
+                    },
+                    onClear = { scope.launch { settings.clearBookshelfSearchHistory() } },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+            AnimatedVisibility(
+                visible = isSearching && searchQuery.isBlank() && searchHistory.isEmpty()
+            ) {
+                Text(
+                    text = stringResource(R.string.bookshelf_search_history_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+            val hasActiveFilters = filter != BookshelfFilter.ALL
+                    || sortBy != BookshelfSort.NAME
+                    || selectedCategory != null
+                    || searchQuery.isNotBlank()
+                    || isSearching
             // Filter / sort row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(
-                    selected = filter == BookshelfFilter.ALL,
-                    onClick = { filter = BookshelfFilter.ALL },
-                    label = { Text("全部") }
-                )
-                FilterChip(
-                    selected = filter == BookshelfFilter.FAVORITES,
-                    onClick = { filter = BookshelfFilter.FAVORITES },
-                    label = { Text("收藏") }
-                )
-                FilterChip(
-                    selected = filter == BookshelfFilter.UNREAD,
-                    onClick = { filter = BookshelfFilter.UNREAD },
-                    label = { Text("未读") }
-                )
-                FilterChip(
-                    selected = filter == BookshelfFilter.READING,
-                    onClick = { filter = BookshelfFilter.READING },
-                    label = { Text("阅读中") }
-                )
-                FilterChip(
-                    selected = filter == BookshelfFilter.READ,
-                    onClick = { filter = BookshelfFilter.READ },
-                    label = { Text("已读") }
-                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (hasActiveFilters) {
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                filter = BookshelfFilter.ALL
+                                sortBy = BookshelfSort.NAME
+                                selectedCategory = null
+                                searchQuery = ""
+                                isSearching = false
+                            },
+                            label = { Text(stringResource(R.string.bookshelf_clear_filters)) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        )
+                    }
+                    FilterChip(
+                        selected = filter == BookshelfFilter.ALL,
+                        onClick = { filter = BookshelfFilter.ALL },
+                        label = { Text(stringResource(R.string.bookshelf_all)) }
+                    )
+                    FilterChip(
+                        selected = filter == BookshelfFilter.FAVORITES,
+                        onClick = { filter = BookshelfFilter.FAVORITES },
+                        label = { Text(stringResource(R.string.bookshelf_favorites)) }
+                    )
+                    FilterChip(
+                        selected = filter == BookshelfFilter.UNREAD,
+                        onClick = { filter = BookshelfFilter.UNREAD },
+                        label = { Text(stringResource(R.string.bookshelf_unread)) }
+                    )
+                    FilterChip(
+                        selected = filter == BookshelfFilter.READING,
+                        onClick = { filter = BookshelfFilter.READING },
+                        label = { Text(stringResource(R.string.bookshelf_reading)) }
+                    )
+                    FilterChip(
+                        selected = filter == BookshelfFilter.READ,
+                        onClick = { filter = BookshelfFilter.READ },
+                        label = { Text(stringResource(R.string.bookshelf_read)) }
+                    )
+                    FilterChip(
+                        selected = filter == BookshelfFilter.NEW,
+                        onClick = { filter = BookshelfFilter.NEW },
+                        label = {
+                            Text(
+                                if (newComicUris.isNotEmpty()) stringResource(R.string.bookshelf_new_added_count, newComicUris.size)
+                                else stringResource(R.string.bookshelf_new_added)
+                            )
+                        },
+                        leadingIcon = if (newComicUris.isNotEmpty()) {
+                            { NewBadge() }
+                        } else null
+                    )
+                }
                 IconButton(onClick = {
-                    sortBy = if (sortBy == BookshelfSort.NAME) BookshelfSort.RECENT else BookshelfSort.NAME
+                    sortBy = when (sortBy) {
+                        BookshelfSort.NAME -> BookshelfSort.RECENT
+                        BookshelfSort.RECENT -> BookshelfSort.PROGRESS
+                        BookshelfSort.PROGRESS -> BookshelfSort.NAME
+                    }
                 }) {
+                    val sortDescription = when (sortBy) {
+                        BookshelfSort.NAME -> stringResource(R.string.bookshelf_sort_by_name)
+                        BookshelfSort.RECENT -> stringResource(R.string.bookshelf_sort_by_recent)
+                        BookshelfSort.PROGRESS -> stringResource(R.string.bookshelf_sort_by_progress)
+                    }
                     Icon(
                         Icons.AutoMirrored.Filled.Sort,
-                        contentDescription = if (sortBy == BookshelfSort.NAME) "按名称排序" else "按最近阅读排序",
+                        contentDescription = sortDescription,
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -333,7 +649,7 @@ fun BookshelfScreen(
                     FilterChip(
                         selected = selectedCategory == null,
                         onClick = { selectedCategory = null },
-                        label = { Text("全部分类") }
+                        label = { Text(stringResource(R.string.bookshelf_all_categories)) }
                     )
                     categories.forEach { cat ->
                         FilterChip(
@@ -344,7 +660,7 @@ fun BookshelfScreen(
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     IconButton(onClick = { showCategoryDialog = true }) {
-                        Icon(Icons.Default.Category, contentDescription = "管理分类")
+                        Icon(Icons.Default.Category, contentDescription = stringResource(R.string.bookshelf_manage_categories))
                     }
                 }
             } else {
@@ -353,24 +669,39 @@ fun BookshelfScreen(
                     horizontalArrangement = Arrangement.End
                 ) {
                     IconButton(onClick = { showCategoryDialog = true }) {
-                        Icon(Icons.Default.Category, contentDescription = "管理分类")
+                        Icon(Icons.Default.Category, contentDescription = stringResource(R.string.bookshelf_manage_categories))
                     }
                 }
             }
 
-            Box(modifier = Modifier.fillMaxSize()) {
+
+            val pullRefreshState = rememberPullRefreshState(
+                refreshing = uiState.isLoading,
+                onRefresh = { viewModel.refresh() }
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pullRefresh(pullRefreshState)
+            ) {
                 when {
-                    uiState.isLoading -> {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                    }
                     uiState.error != null -> {
-                        Text(
-                            text = "错误：${uiState.error}",
-                            modifier = Modifier.align(Alignment.Center),
-                            textAlign = TextAlign.Center
-                        )
+                        Column(
+                            modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = stringResource(R.string.bookshelf_error_prefix, uiState.error ?: ""),
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            TextButton(onClick = { viewModel.refresh() }) {
+                                Text(stringResource(R.string.bookshelf_error_retry))
+                            }
+                        }
                     }
-                    uiState.rootUri == null -> {
+                        uiState.rootUri == null -> {
                         EmptyBookshelf(
                             onSelectFolder = { folderLauncher.launch(null) },
                             modifier = Modifier.align(Alignment.Center)
@@ -378,7 +709,7 @@ fun BookshelfScreen(
                     }
                     filteredComics.isEmpty() -> {
                         Text(
-                            text = "该目录下没有漫画",
+                            text = stringResource(R.string.bookshelf_no_comics_in_folder),
                             modifier = Modifier.align(Alignment.Center),
                             textAlign = TextAlign.Center
                         )
@@ -386,46 +717,46 @@ fun BookshelfScreen(
                     else -> {
                         Column(modifier = Modifier.fillMaxSize()) {
                             if (isAtRoot && recentComics.isNotEmpty()) {
+                                val lastComic = recentComics.first()
+                                val onContinueLast = remember(lastComic, onOpenReader, onOpenComic) {
+                                    { continueReading(lastComic, onOpenReader, onOpenComic) }
+                                }
+                                ContinueReadingBanner(
+                                    comic = lastComic,
+                                    progress = progressMap[lastComic.uri.toString()]?.first ?: 0,
+                                    total = progressMap[lastComic.uri.toString()]?.second
+                                        ?: lastComic.totalPages.coerceAtLeast(1),
+                                    onContinue = onContinueLast
+                                )
+                                val onContinueRecent = remember(onOpenReader, onOpenComic) {
+                                    { comic: ComicEntry -> continueReading(comic, onOpenReader, onOpenComic) }
+                                }
                                 RecentReadsSection(
                                     comics = recentComics,
-                                    progressMap = uiState.progressMap,
-                                    onOpenComic = onOpenComic
+                                    progressMap = progressMap,
+                                    onContinue = onContinueRecent
                                 )
                             }
-                            val minCell = when (windowSize) {
-                                WindowSizeClass.TABLET -> 160.dp
-                                WindowSizeClass.PHONE_LANDSCAPE -> 140.dp
-                                WindowSizeClass.PHONE_PORTRAIT -> 120.dp
-                            }
-                            LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = minCell),
-                                contentPadding = PaddingValues(12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxSize()
+                            val comicCallbacks = remember(
+                                selectedUris, selectionMode, viewModel, onOpenComic, onOpenReader,
+                                settings, scope, context, categories
                             ) {
-                                gridItems(filteredComics, key = { it.uri.toString() }) { comic ->
-                                    val isSelected = selectedUris.contains(comic.uri.toString())
-                                    val comicCats = comicCategories[comic.uri.toString()] ?: emptySet()
-                                    ComicCard(
-                                        comic = comic,
-                                        isFavorite = favorites.contains(comic.uri.toString()),
-                                        readingStatus = viewModel.getReadingStatus(comic.uri),
-                                        isSelected = isSelected,
-                                        selectionMode = selectionMode,
-                                        categories = comicCats,
-                                        hasCategories = categories.isNotEmpty(),
+                                { comic: ComicEntry ->
+                                    val uriString = comic.uri.toString()
+                                    ComicCallbacks(
                                         onClick = {
+                                            val isSelected = selectedUris.contains(uriString)
                                             if (selectionMode) {
                                                 selectedUris = if (isSelected) {
-                                                    selectedUris - comic.uri.toString()
+                                                    selectedUris - uriString
                                                 } else {
-                                                    selectedUris + comic.uri.toString()
+                                                    selectedUris + uriString
                                                 }
                                                 if (selectedUris.isEmpty()) selectionMode = false
                                             } else if (comic.isDirectory) {
                                                 viewModel.openDirectory(comic.uri)
                                             } else {
+                                                viewModel.markComicSeen(uriString)
                                                 onOpenComic(comic)
                                             }
                                         },
@@ -433,10 +764,11 @@ fun BookshelfScreen(
                                             if (!selectionMode) {
                                                 selectionMode = true
                                             }
+                                            val isSelected = selectedUris.contains(uriString)
                                             selectedUris = if (isSelected) {
-                                                selectedUris - comic.uri.toString()
+                                                selectedUris - uriString
                                             } else {
-                                                selectedUris + comic.uri.toString()
+                                                selectedUris + uriString
                                             }
                                         },
                                         onToggleFavorite = {
@@ -453,25 +785,127 @@ fun BookshelfScreen(
                                             scrapedMetadata = null
                                             showMetadataDialog = true
                                         },
-                                        onShowExtras = {
-                                            comicForExtras = comic
+                                        onShowExtras = { comicForExtras = comic },
+                                        onClearCache = {
+                                            scope.launch(Dispatchers.IO) {
+                                                val cache = com.mangareader.cache.PageCacheManager.getInstance(context)
+                                                val size = cache.getCacheSizeFor(comic.uri.toString())
+                                                cache.clearByCacheId(comic.uri.toString())
+                                                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                    val sizeText = when {
+                                                        size <= 0 -> context.getString(R.string.bookshelf_cache_size_b, 0)
+                                                        size < 1024 * 1024 -> context.getString(R.string.bookshelf_cache_size_kb, size / 1024)
+                                                        else -> context.getString(R.string.bookshelf_cache_size_mb, size / (1024.0 * 1024.0))
+                                                    }
+                                                    val msg = if (size > 0) context.getString(R.string.bookshelf_cache_cleared_snackbar, sizeText) else context.getString(R.string.bookshelf_no_cache_to_clear)
+                                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         }
                                     )
+                                }
+                            }
+
+                            if (filteredComics.isEmpty() && !uiState.isLoading) {
+                                EmptyBookshelfState(
+                                    hasSearch = debouncedSearchQuery.isNotBlank(),
+                                    hasFilter = filter != BookshelfFilter.ALL || selectedCategory != null,
+                                    isRoot = isAtRoot,
+                                    onClearFilter = {
+                                        filter = BookshelfFilter.ALL
+                                        selectedCategory = null
+                                        searchQuery = ""
+                                    },
+                                    onOpenBrowser = onOpenBrowser
+                                )
+                            } else if (viewMode == BookshelfViewMode.GRID) {
+                                val minCell = when (windowSize) {
+                                    WindowSizeClass.TABLET -> 160.dp
+                                    WindowSizeClass.PHONE_LANDSCAPE -> 140.dp
+                                    WindowSizeClass.PHONE_PORTRAIT -> 120.dp
+                                }
+                                LazyVerticalGrid(
+                                    columns = GridCells.Adaptive(minSize = minCell),
+                                    contentPadding = PaddingValues(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    gridItems(filteredComics, key = { it.uri.toString() }) { comic ->
+                                        val callbacks = remember(comic.uri.toString()) { comicCallbacks(comic) }
+                                        val comicCats = comicCategories[comic.uri.toString()] ?: emptySet()
+                                        val (progress, total) = progressMap[comic.uri.toString()] ?: (0 to 0)
+                                        ComicCard(
+                                            comic = comic,
+                                            isFavorite = favorites.contains(comic.uri.toString()),
+                                            readingStatus = viewModel.getReadingStatus(comic.uri),
+                                            progress = progress,
+                                            total = total,
+                                            isSelected = selectedUris.contains(comic.uri.toString()),
+                                            selectionMode = selectionMode,
+                                            isNew = newComicUris.contains(comic.uri.toString()),
+                                            categories = comicCats,
+                                            hasCategories = categories.isNotEmpty(),
+                                            onClick = callbacks.onClick,
+                                            onLongClick = callbacks.onLongClick,
+                                            onToggleFavorite = callbacks.onToggleFavorite,
+                                            onCategorize = callbacks.onCategorize,
+                                            onScrape = callbacks.onScrape,
+                                            onShowExtras = callbacks.onShowExtras,
+                                            onClearCache = callbacks.onClearCache
+                                        )
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    contentPadding = PaddingValues(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(filteredComics, key = { it.uri.toString() }) { comic ->
+                                        val callbacks = remember(comic.uri.toString()) { comicCallbacks(comic) }
+                                        val comicCats = comicCategories[comic.uri.toString()] ?: emptySet()
+                                        val (progress, total) = progressMap[comic.uri.toString()] ?: (0 to 0)
+                                        ComicListItem(
+                                            comic = comic,
+                                            isFavorite = favorites.contains(comic.uri.toString()),
+                                            readingStatus = viewModel.getReadingStatus(comic.uri),
+                                            progress = progress,
+                                            total = total,
+                                            isSelected = selectedUris.contains(comic.uri.toString()),
+                                            isNew = newComicUris.contains(comic.uri.toString()),
+                                            categories = comicCats,
+                                            hasCategories = categories.isNotEmpty(),
+                                            onClick = callbacks.onClick,
+                                            onLongClick = callbacks.onLongClick,
+                                            onToggleFavorite = callbacks.onToggleFavorite,
+                                            onCategorize = callbacks.onCategorize,
+                                            onScrape = callbacks.onScrape,
+                                            onShowExtras = callbacks.onShowExtras,
+                                            onClearCache = callbacks.onClearCache
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                PullRefreshIndicator(
+                    refreshing = uiState.isLoading,
+                    state = pullRefreshState,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
             }
         }
     }
+}
 
     // 分类管理对话框
     if (showCategoryDialog) {
         var newCategoryName by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showCategoryDialog = false },
-            title = { Text("管理分类") },
+            title = { Text(stringResource(R.string.bookshelf_manage_categories_title)) },
             text = {
                 Column {
                     if (categories.isNotEmpty()) {
@@ -485,7 +919,7 @@ fun BookshelfScreen(
                                     scope.launch(Dispatchers.IO) { settings.removeCategory(cat) }
                                     if (selectedCategory == cat) selectedCategory = null
                                 }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
@@ -494,7 +928,7 @@ fun BookshelfScreen(
                     OutlinedTextField(
                         value = newCategoryName,
                         onValueChange = { newCategoryName = it },
-                        label = { Text("新分类名称") },
+                        label = { Text(stringResource(R.string.bookshelf_new_category_name)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -506,30 +940,33 @@ fun BookshelfScreen(
                     if (trimmed.isNotBlank()) {
                         scope.launch(Dispatchers.IO) {
                             settings.addCategory(trimmed)
-                            snackbarHostState.showSnackbar("已添加分类：$trimmed")
+                            withContext(Dispatchers.Main) {
+                                snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_category_added_snackbar, trimmed))
+                            }
                         }
                         newCategoryName = ""
                         showCategoryDialog = false
                     }
-                }) { Text("添加") }
+                }) { Text(stringResource(R.string.bookshelf_add_label)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCategoryDialog = false }) { Text("关闭") }
+                TextButton(onClick = { showCategoryDialog = false }) { Text(stringResource(R.string.bookshelf_close_label)) }
             }
         )
     }
 
     // 漫画分类选择对话框
     if (showComicCategoryDialog) {
-        val urisToCategorize = if (comicToCategorize != null) {
-            listOf(comicToCategorize!!.uri)
+        val singleComic = comicToCategorize
+        val urisToCategorize = if (singleComic != null) {
+            listOf(singleComic.uri)
         } else {
             selectedUris.mapNotNull { str -> runCatching { Uri.parse(str) }.getOrNull() }
         }
-        val title = if (comicToCategorize != null) {
-            "分类: ${comicToCategorize!!.title}"
+        val title = if (singleComic != null) {
+            stringResource(R.string.bookshelf_categorize_comic_title, singleComic.title)
         } else {
-            "为 ${urisToCategorize.size} 项选择分类"
+            stringResource(R.string.bookshelf_categorize_multi_title, urisToCategorize.size)
         }
         AlertDialog(
             onDismissRequest = {
@@ -543,14 +980,14 @@ fun BookshelfScreen(
             title = { Text(title) },
             text = {
                 LazyColumn {
-                    items(categories) { cat ->
-                        val currentCats = if (comicToCategorize != null) {
-                            comicCategories[comicToCategorize!!.uri.toString()] ?: emptySet()
+                    items(categories, key = { it }) { cat ->
+                        val currentCats = if (singleComic != null) {
+                            comicCategories[singleComic.uri.toString()] ?: emptySet()
                         } else {
                             urisToCategorize.mapNotNull { comicCategories[it.toString()] }.flatten().toSet()
                         }
                         val isInCategory = currentCats.contains(cat)
-                        val allInCategory = if (comicToCategorize != null) isInCategory else {
+                        val allInCategory = if (singleComic != null) isInCategory else {
                             urisToCategorize.all { (comicCategories[it.toString()] ?: emptySet()).contains(cat) }
                         }
                         Row(
@@ -584,7 +1021,7 @@ fun BookshelfScreen(
                         selectionMode = false
                         selectedUris = emptySet()
                     }
-                }) { Text("完成") }
+                }) { Text(stringResource(R.string.bookshelf_done_label)) }
             }
         )
     }
@@ -592,173 +1029,333 @@ fun BookshelfScreen(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("确认删除") },
-            text = { Text("确定要删除选中的 ${selectedUris.size} 个漫画吗？此操作将同时删除文件本身，无法撤销。") },
+            title = { Text(stringResource(R.string.bookshelf_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.bookshelf_delete_confirm_message, selectedUris.size)) },
             confirmButton = {
                 TextButton(onClick = {
                     val uris = selectedUris.mapNotNull { str -> runCatching { Uri.parse(str) }.getOrNull() }
                     viewModel.removeComics(uris)
-                    scope.launch { snackbarHostState.showSnackbar("已删除 ${uris.size} 个漫画") }
+                    scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_deleted_snackbar, uris.size)) }
                     showDeleteConfirm = false
                     selectionMode = false
                     selectedUris = emptySet()
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                }) { Text(stringResource(R.string.bookshelf_delete_label), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text(stringResource(R.string.bookshelf_cancel_label)) }
 
+            }
+        )
+    }
+
+    if (showRenameDialog && renameTarget != null) {
+        var newName by remember(renameTarget) { mutableStateOf(renameTarget?.title?.substringBeforeLast('.') ?: "") }
+        AlertDialog(
+            onDismissRequest = {
+                showRenameDialog = false
+                renameTarget = null
+            },
+            title = { Text(stringResource(R.string.bookshelf_rename_title)) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text(stringResource(R.string.bookshelf_new_file_name)) },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = renameTarget ?: return@TextButton
+                        val ext = target.title.substringAfterLast('.', "")
+                        val finalName = if (ext.isNotBlank()) "$newName.$ext" else newName
+                        if (finalName.isNotBlank() && finalName != target.title) {
+                            viewModel.renameComic(target.uri, finalName) { success ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (success) context.getString(R.string.bookshelf_renamed_snackbar, finalName) else context.getString(R.string.bookshelf_rename_failed_snackbar)
+                                    )
+                                }
+                            }
+                        }
+                        showRenameDialog = false
+                        renameTarget = null
+                        selectionMode = false
+                        selectedUris = emptySet()
+                    },
+                    enabled = newName.isNotBlank()
+                ) { Text(stringResource(R.string.bookshelf_ok_label)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showRenameDialog = false
+                    renameTarget = null
+                }) { Text(stringResource(R.string.bookshelf_cancel_label)) }
+            }
+        )
+    }
+
+    // 多书架切换对话框
+    if (showBookshelfSwitcher) {
+        AlertDialog(
+            onDismissRequest = { showBookshelfSwitcher = false },
+            title = { Text(stringResource(R.string.bookshelf_switch_bookshelf_title)) },
+            text = {
+                Column {
+                    if (bookshelfUris.isEmpty()) {
+                        Text(stringResource(R.string.bookshelf_no_bookshelf_added), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        bookshelfUris.forEachIndexed { index, uriString ->
+                            val name = runCatching {
+                                android.net.Uri.parse(uriString).lastPathSegment?.substringAfterLast('/')
+                            }.getOrNull() ?: uriString
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showBookshelfSwitcher = false
+                                        viewModel.switchBookshelf(index)
+                                    }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = index == currentBookshelfIndex,
+                                    onClick = null
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = name,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                IconButton(onClick = {
+                                    viewModel.removeBookshelf(index)
+                                    if (bookshelfUris.size <= 1) showBookshelfSwitcher = false
+                                }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = stringResource(R.string.bookshelf_remove_bookshelf),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBookshelfSwitcher = false
+                    val initialUri = savedRootUriString?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                    folderLauncher.launch(initialUri)
+                }) { Text(stringResource(R.string.bookshelf_add_bookshelf_label)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBookshelfSwitcher = false }) { Text(stringResource(R.string.bookshelf_close_label)) }
             }
         )
     }
 
     // 元数据刮削对话框
-    if (showMetadataDialog && metadataTarget != null) {
-        val target = metadataTarget!!
-        LaunchedEffect(target) {
-            if (scrapedMetadata == null && !isScraping) {
-                isScraping = true
-                val localMeta = MetadataScraper.parseFilename(target.title)
-                scrapedMetadata = localMeta
-                try {
-                    val keyword = localMeta.title.ifBlank { target.title }
-                    val bangumi = MetadataScraper.searchBangumi(keyword)
-                    if (bangumi != null) {
-                        scrapedMetadata = bangumi.copy(
-                            volume = localMeta.volume,
-                            chapter = localMeta.chapter,
-                            author = localMeta.author.ifBlank { bangumi.author }
-                        )
-                    } else {
-                        val mangadex = MetadataScraper.searchMangaDex(keyword)
-                        if (mangadex != null) {
-                            scrapedMetadata = mangadex.copy(
+    if (showMetadataDialog) {
+        metadataTarget?.let { target ->
+            LaunchedEffect(target) {
+                if (scrapedMetadata == null && !isScraping) {
+                    isScraping = true
+                    val localMeta = MetadataScraper.parseFilename(target.title)
+                    scrapedMetadata = localMeta
+                    try {
+                        val keyword = localMeta.title.ifBlank { target.title }
+                        val bangumi = MetadataScraper.searchBangumi(keyword)
+                        if (bangumi != null) {
+                            scrapedMetadata = bangumi.copy(
                                 volume = localMeta.volume,
-                                chapter = localMeta.chapter
+                                chapter = localMeta.chapter,
+                                author = localMeta.author.ifBlank { bangumi.author }
                             )
+                        } else {
+                            val mangadex = MetadataScraper.searchMangaDex(keyword)
+                            if (mangadex != null) {
+                                scrapedMetadata = mangadex.copy(
+                                    volume = localMeta.volume,
+                                    chapter = localMeta.chapter
+                                )
+                            }
                         }
+                    } catch (_: CancellationException) {
+                        // 对话框关闭时协程被取消，无需处理
+                    } catch (_: Exception) {
+                    } finally {
+                        isScraping = false
                     }
-                } catch (_: Exception) {
-                } finally {
-                    isScraping = false
                 }
             }
-        }
 
-        val meta = scrapedMetadata
-        AlertDialog(
-            onDismissRequest = {
-                showMetadataDialog = false
-                scrapedMetadata = null
-            },
-            title = { Text("元数据刮削") },
-            text = {
-                if (isScraping) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("正在查询...")
-                    }
-                } else if (meta != null) {
-                    Column {
-                        Text("文件: ${target.title}", style = MaterialTheme.typography.bodySmall)
-                        if (meta.title.isNotEmpty()) Text("标题: ${meta.title}")
-                        if (meta.author.isNotEmpty()) Text("作者: ${meta.author}")
-                        if (meta.volume > 0) Text("卷: ${meta.volume}")
-                        if (meta.chapter.isNotEmpty()) Text("话: ${meta.chapter}")
-                        if (meta.year > 0) Text("年份: ${meta.year}")
-                        if (meta.description.isNotEmpty()) Text("简介: ${meta.description.take(200)}")
-                        if (meta.tags.isNotEmpty()) Text("标签: ${meta.tags.take(5).joinToString(", ")}")
-                        Text("来源: ${meta.source}", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else {
-                    Text("未能获取到元数据", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
+            val meta = scrapedMetadata
+            AlertDialog(
+                onDismissRequest = {
                     showMetadataDialog = false
                     scrapedMetadata = null
-                }) {
-                    Text("关闭")
+                },
+                title = { Text(stringResource(R.string.bookshelf_metadata_scrape_title)) },
+                text = {
+                    if (isScraping) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.bookshelf_metadata_querying))
+                        }
+                    } else if (meta != null) {
+                        Column {
+                            Text(stringResource(R.string.bookshelf_metadata_file_label, target.title), style = MaterialTheme.typography.bodySmall)
+                            if (meta.title.isNotEmpty()) Text(stringResource(R.string.bookshelf_metadata_title_label, meta.title))
+                            if (meta.author.isNotEmpty()) Text(stringResource(R.string.bookshelf_metadata_author_label, meta.author))
+                            if (meta.volume > 0) Text(stringResource(R.string.bookshelf_metadata_volume_label, meta.volume))
+                            if (meta.chapter.isNotEmpty()) Text(stringResource(R.string.bookshelf_metadata_chapter_label, meta.chapter))
+                            if (meta.year > 0) Text(stringResource(R.string.bookshelf_metadata_year_label, meta.year))
+                            if (meta.description.isNotEmpty()) Text(stringResource(R.string.bookshelf_metadata_description_label, meta.description.take(200)))
+                            if (meta.tags.isNotEmpty()) Text(stringResource(R.string.bookshelf_metadata_tags_label, meta.tags.take(5).joinToString(", ")))
+                            Text(stringResource(R.string.bookshelf_metadata_source_label, meta.source), style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        Text(stringResource(R.string.bookshelf_metadata_not_found), color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showMetadataDialog = false
+                        scrapedMetadata = null
+                    }) {
+                        Text(stringResource(R.string.bookshelf_close_label))
+                    }
                 }
-            }
-        )
+            )
+        }
     }
 
-    // 顶部更多菜单：联系作者、阅读统计、我的书单、WebDAV、主题
+    // 顶部更多菜单：浏览、添加书架、阅读历史、帮助、联系作者、阅读统计、我的书单、WebDAV、主题
     DropdownMenu(
         expanded = showMoreMenu,
         onDismissRequest = { showMoreMenu = false }
     ) {
         DropdownMenuItem(
-            text = { Text("联系作者") },
-            leadingIcon = { Icon(Icons.Default.ContactMail, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_browser)) },
+            leadingIcon = { Icon(Icons.Default.Explore, contentDescription = stringResource(R.string.bookshelf_browser)) },
+            onClick = {
+                showMoreMenu = false
+                onOpenBrowser()
+            }
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.bookshelf_add_directory)) },
+            leadingIcon = { Icon(Icons.Default.Add, contentDescription = stringResource(R.string.bookshelf_add_directory)) },
+            onClick = {
+                showMoreMenu = false
+                val initialUri = savedRootUriString?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                folderLauncher.launch(initialUri)
+            }
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.bookshelf_read_history)) },
+            leadingIcon = { Icon(Icons.Default.History, contentDescription = stringResource(R.string.bookshelf_read_history)) },
+            onClick = {
+                showMoreMenu = false
+                onShowHistory()
+            }
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.bookshelf_help)) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Help, contentDescription = stringResource(R.string.bookshelf_help)) },
+            onClick = {
+                showMoreMenu = false
+                onShowHelpCallback()
+            }
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.bookshelf_contact_author)) },
+            leadingIcon = { Icon(Icons.Default.ContactMail, contentDescription = stringResource(R.string.bookshelf_contact_author)) },
             onClick = {
                 showMoreMenu = false
                 showContact = true
             }
         )
         DropdownMenuItem(
-            text = { Text("阅读统计") },
-            leadingIcon = { Icon(Icons.Default.BarChart, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_reading_stats)) },
+            leadingIcon = { Icon(Icons.Default.BarChart, contentDescription = stringResource(R.string.bookshelf_reading_stats)) },
             onClick = {
                 showMoreMenu = false
                 showStats = true
             }
         )
         DropdownMenuItem(
-            text = { Text("我的书单") },
-            leadingIcon = { Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_reading_lists)) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = stringResource(R.string.bookshelf_reading_lists)) },
             onClick = {
                 showMoreMenu = false
                 showLists = true
             }
         )
         DropdownMenuItem(
-            text = { Text("WebDAV 同步") },
-            leadingIcon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_webdav_sync)) },
+            leadingIcon = { Icon(Icons.Default.CloudSync, contentDescription = stringResource(R.string.bookshelf_webdav_sync)) },
             onClick = {
                 showMoreMenu = false
-                Toast.makeText(context, "WebDAV 同步暂未完全开发，仅可配置和测试连接", Toast.LENGTH_SHORT).show()
                 showWebDav = true
             }
         )
         DropdownMenuItem(
-            text = { Text("SMB/NAS 流式阅读") },
-            leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_smb_nas)) },
+            leadingIcon = { Icon(Icons.Default.Storage, contentDescription = stringResource(R.string.bookshelf_smb_nas)) },
             onClick = {
                 showMoreMenu = false
-                Toast.makeText(context, "SMB/NAS 流式阅读暂未完全开发，仅可浏览远程目录", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.bookshelf_smb_nas_toast), Toast.LENGTH_SHORT).show()
                 showSmbNas = true
             }
         )
         DropdownMenuItem(
-            text = { Text("主题与阅读背景") },
-            leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_theme)) },
+            leadingIcon = { Icon(Icons.Default.Palette, contentDescription = stringResource(R.string.bookshelf_theme)) },
             onClick = {
                 showMoreMenu = false
                 showTheme = true
             }
         )
+        if (newComicUris.isNotEmpty()) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.bookshelf_clear_new_badges)) },
+                leadingIcon = { Icon(Icons.Default.NewReleases, contentDescription = stringResource(R.string.bookshelf_clear_new_badges)) },
+                onClick = {
+                    showMoreMenu = false
+                    viewModel.clearNewBadges()
+                    if (filter == BookshelfFilter.NEW) {
+                        filter = BookshelfFilter.ALL
+                    }
+                    scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.bookshelf_cleared_new_badges_snackbar, newComicUris.size)) }
+                }
+            )
+        }
         DropdownMenuItem(
-            text = { Text("设置") },
-            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_settings)) },
+            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.bookshelf_settings)) },
             onClick = {
                 showMoreMenu = false
                 onOpenSettings()
             }
         )
         DropdownMenuItem(
-            text = { Text("GitHub Star") },
-            leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_github_star)) },
+            leadingIcon = { Icon(Icons.Default.Star, contentDescription = stringResource(R.string.bookshelf_github_star)) },
             onClick = {
                 showMoreMenu = false
                 showGitHubStar = true
             }
         )
         DropdownMenuItem(
-            text = { Text("打赏支持") },
-            leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) },
+            text = { Text(stringResource(R.string.bookshelf_donation)) },
+            leadingIcon = { Icon(Icons.Default.Star, contentDescription = stringResource(R.string.bookshelf_donation)) },
             onClick = {
                 showMoreMenu = false
                 showDonation = true
@@ -773,7 +1370,7 @@ fun BookshelfScreen(
     if (showStats) {
         ReadingStatsDialog(
             comics = uiState.comics,
-            progressMap = uiState.progressMap,
+            progressMap = progressMap,
             stats = stats,
             extras = extrasMap,
             lists = readingLists,
@@ -792,7 +1389,7 @@ fun BookshelfScreen(
 
     if (showWebDav) {
         WebDavSyncDialog(
-            progressMap = uiState.progressMap,
+            progressMap = progressMap,
             bookmarks = bookmarksMap,
             favorites = favorites,
             onDismiss = { showWebDav = false }
@@ -800,16 +1397,16 @@ fun BookshelfScreen(
     }
 
     if (showGitHubStar) {
-        val context = LocalContext.current
+        val ctx = LocalContext.current
         GitHubStarDialog(
             onDismiss = { showGitHubStar = false },
             onOpenGitHub = {
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(com.mangareader.Constants.GITHUB_REPO_URL))
-                    context.startActivity(intent)
+                    ctx.startActivity(intent)
                     showGitHubStar = false
                 } catch (e: Exception) {
-                    android.widget.Toast.makeText(context, "无法打开浏览器", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(ctx, ctx.getString(R.string.bookshelf_cannot_open_browser_toast), android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
         )
@@ -862,240 +1459,11 @@ fun BookshelfScreen(
     }
 }
 
-private enum class BookshelfFilter { ALL, FAVORITES, UNREAD, READING, READ }
-private enum class BookshelfSort { NAME, RECENT }
-
-@Composable
-private fun ComicCard(
-    comic: ComicEntry,
-    isFavorite: Boolean,
-    readingStatus: com.mangareader.data.ReadingStatus,
-    isSelected: Boolean,
-    selectionMode: Boolean,
-    categories: Set<String> = emptySet(),
-    hasCategories: Boolean = false,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onCategorize: () -> Unit = {},
-    onScrape: () -> Unit = {},
-    onShowExtras: () -> Unit = {}
-) {
-    var showMenu by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = {
-                    if (selectionMode) {
-                        onLongClick()
-                    } else {
-                        showMenu = true
-                    }
-                }
-            )
-            .widthIn(min = 120.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        val coverUri = comic.coverUri
-        val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent
-        Box {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.7f)
-                    .border(3.dp, borderColor, RoundedCornerShape(8.dp)),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                if (coverUri != null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(coverUri)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = comic.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                        placeholder = null,
-                        fallback = null,
-                        error = null
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp)
-                        )
-                    }
-                }
-            }
-            // 阅读状态角标
-            val statusText = when (readingStatus) {
-                com.mangareader.data.ReadingStatus.READ -> "已读"
-                com.mangareader.data.ReadingStatus.READING -> "阅读中"
-                com.mangareader.data.ReadingStatus.UNREAD -> ""
-            }
-            val statusColor = when (readingStatus) {
-                com.mangareader.data.ReadingStatus.READ -> androidx.compose.ui.graphics.Color(0xFF4CAF50)
-                com.mangareader.data.ReadingStatus.READING -> androidx.compose.ui.graphics.Color(0xFFFF9800)
-                com.mangareader.data.ReadingStatus.UNREAD -> androidx.compose.ui.graphics.Color.Transparent
-            }
-            if (statusText.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .background(statusColor)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = statusText,
-                        color = androidx.compose.ui.graphics.Color.White,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-            }
-            // 收藏和分类按钮（选择模式下隐藏）
-            if (!selectionMode) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(40.dp)
-                        .clickable(onClick = onToggleFavorite)
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                        contentDescription = if (isFavorite) "取消收藏" else "收藏",
-                        tint = if (isFavorite) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                if (hasCategories) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(40.dp)
-                            .clickable(onClick = onCategorize)
-                            .padding(8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        androidx.compose.material3.Icon(
-                            imageVector = Icons.Default.Category,
-                            contentDescription = "分类",
-                            tint = if (categories.isNotEmpty()) MaterialTheme.colorScheme.secondary else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
-            // 选中标记
-            if (selectionMode && isSelected) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "已选",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .size(24.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = comic.title,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-        if (categories.isNotEmpty()) {
-            Text(
-                text = categories.take(2).joinToString(", ") + if (categories.size > 2) "..." else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-
-    androidx.compose.material3.DropdownMenu(
-        expanded = showMenu,
-        onDismissRequest = { showMenu = false }
-    ) {
-        androidx.compose.material3.DropdownMenuItem(
-            text = { Text(if (isFavorite) "取消收藏" else "收藏") },
-            leadingIcon = {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = null
-                )
-            },
-            onClick = {
-                onToggleFavorite()
-                showMenu = false
-            }
-        )
-        androidx.compose.material3.DropdownMenuItem(
-            text = { Text("分类") },
-            leadingIcon = {
-                Icon(imageVector = Icons.Default.Category, contentDescription = null)
-            },
-            onClick = {
-                onCategorize()
-                showMenu = false
-            }
-        )
-        androidx.compose.material3.DropdownMenuItem(
-            text = { Text(if (readingStatus == com.mangareader.data.ReadingStatus.READ) "标记未读" else "标记已读") },
-            leadingIcon = {
-                Icon(imageVector = Icons.Default.DoneAll, contentDescription = null)
-            },
-            onClick = {
-                onLongClick()
-                showMenu = false
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("刮削元数据") },
-            leadingIcon = {
-                Icon(imageVector = Icons.Default.Search, contentDescription = null)
-            },
-            onClick = {
-                onScrape()
-                showMenu = false
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("评分与短评") },
-            leadingIcon = {
-                Icon(imageVector = Icons.Default.RateReview, contentDescription = null)
-            },
-            onClick = {
-                onShowExtras()
-                showMenu = false
-            }
-        )
-    }
-}
-
 @Composable
 private fun RecentReadsSection(
     comics: List<ComicEntry>,
     progressMap: Map<String, Pair<Int, Int>>,
-    onOpenComic: (ComicEntry) -> Unit
+    onContinue: (ComicEntry) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1106,13 +1474,13 @@ private fun RecentReadsSection(
         ) {
             Icon(
                 imageVector = Icons.Default.History,
-                contentDescription = null,
+                contentDescription = stringResource(R.string.bookshelf_recent_reads),
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "最近阅读",
+                text = stringResource(R.string.bookshelf_recent_reads),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -1122,13 +1490,13 @@ private fun RecentReadsSection(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            items(comics) { comic ->
-                val progress = progressMap[comic.uri.toString()]?.second ?: 0
-                val total = comic.totalPages.coerceAtLeast(1)
+            items(comics, key = { it.uri.toString() }) { comic ->
+                val progress = progressMap[comic.uri.toString()]?.first ?: 0
+                val total = progressMap[comic.uri.toString()]?.second ?: comic.totalPages.coerceAtLeast(1)
                 RecentReadCard(
                     comic = comic,
                     progressText = "${progress}/${total}P",
-                    onClick = { onOpenComic(comic) }
+                    onClick = { onContinue(comic) }
                 )
             }
         }
@@ -1139,10 +1507,11 @@ private fun RecentReadsSection(
 private fun RecentReadCard(
     comic: ComicEntry,
     progressText: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(100.dp)
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1151,31 +1520,25 @@ private fun RecentReadCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.7f),
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            val coverUri = comic.coverUri
-            if (coverUri != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(coverUri)
-                        .crossfade(true)
-                        .build(),
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                // 封面加载失败或尚未提取时，默认显示文件夹占位图标
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = stringResource(R.string.bookshelf_default_cover),
+                    modifier = Modifier.size(32.dp)
+                )
+                CoverAsyncImage(
+                    uri = comic.coverUri,
                     contentDescription = comic.title,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Folder,
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
@@ -1197,46 +1560,132 @@ private fun RecentReadCard(
     }
 }
 
+/**
+ * 书架顶部「继续阅读」横幅：展示最近一本漫画的封面、标题与阅读进度，
+ * 点击后直接回到阅读器（单文件漫画）或分卷浏览（多卷漫画）。
+ */
 @Composable
-private fun EmptyBookshelf(
-    onSelectFolder: () -> Unit,
-    modifier: Modifier = Modifier
+private fun ContinueReadingBanner(
+    comic: ComicEntry,
+    progress: Int,
+    total: Int,
+    onContinue: () -> Unit
 ) {
-    Column(
-        modifier = modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    val progressRatio = (progress.toFloat() / total).coerceIn(0f, 1f)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clickable(onClick = onContinue),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        shape = RoundedCornerShape(16.dp)
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(120.dp)
-                .clip(RoundedCornerShape(28.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 64.dp, height = 90.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                DefaultCoverIcon(comic = comic, modifier = Modifier.fillMaxSize())
+                CoverAsyncImage(
+                    uri = comic.coverUri,
+                    contentDescription = comic.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.bookshelf_continue_reading),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = comic.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progressRatio },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.bookshelf_progress_format, progress, total, (progressRatio * 100).toInt()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             Icon(
-                imageVector = Icons.Default.CollectionsBookmark,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary
+                imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                contentDescription = stringResource(R.string.bookshelf_continue_reading),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp)
             )
         }
-        Spacer(modifier = Modifier.height(20.dp))
-        Text("还没有漫画哦", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            "选择一个文件夹作为书架，里面的漫画就会出现在这里～",
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(
-            onClick = onSelectFolder,
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("添加书架目录")
+    }
+}
+
+/**
+ * 根据漫画类型决定直接打开阅读器或先进入分卷浏览。
+ * 单文件漫画直接续读；多卷/目录漫画保留进入分卷列表的入口。
+ */
+private fun continueReading(
+    comic: ComicEntry,
+    onOpenReader: (ComicEntry) -> Unit,
+    onOpenComic: (ComicEntry) -> Unit
+) {
+    if (comic.isDirectory || comic.type == ComicType.COMIC_BOOK) {
+        onOpenComic(comic)
+    } else {
+        onOpenReader(comic)
+    }
+}
+
+/**
+ * 将书架最近一次扫描时间格式化为相对时间提示。
+ */
+private fun formatBookshelfScanTime(context: Context, lastScanAt: Long): String {
+    if (lastScanAt <= 0L) return ""
+    val diff = System.currentTimeMillis() - lastScanAt
+    return when {
+        diff < 60_000L -> context.getString(R.string.bookshelf_scan_just_now)
+        diff < 3_600_000L -> context.getString(R.string.bookshelf_scan_minutes_ago, diff / 60_000)
+        diff < 86_400_000L -> context.getString(R.string.bookshelf_scan_hours_ago, diff / 3_600_000)
+        diff < 7 * 86_400_000L -> context.getString(R.string.bookshelf_scan_days_ago, diff / 86_400_000)
+        else -> {
+            val fmt = DateTimeFormatter.ofPattern(context.getString(R.string.bookshelf_scan_date_format), Locale.getDefault())
+            val dt = Instant.ofEpochMilli(lastScanAt).atZone(ZoneId.systemDefault()).toLocalDateTime()
+            fmt.format(dt) + context.getString(R.string.bookshelf_scan_date_suffix)
         }
+    }
+}
+
+/**
+ * 批量分享漫画源文件。通过 FileProvider 将缓存副本以 ACTION_SEND_MULTIPLE 发送，
+ * 授予接收应用临时读取权限。
+ */
+private fun shareComicFiles(context: Context, uris: List<Uri>) {
+    val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = "*/*"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(intent, context.getString(R.string.bookshelf_share_chooser)))
+    }.onFailure {
+        Toast.makeText(context, R.string.bookshelf_share_failed, Toast.LENGTH_SHORT).show()
     }
 }

@@ -1,6 +1,8 @@
 package com.mangareader.provider
 
 import android.graphics.Bitmap
+import com.mangareader.data.ComicProvider
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 插件化 [ComicProvider] 接口预留。
@@ -23,7 +25,7 @@ interface PluginComicProvider : ComicProvider {
  * 插件注册表。未来可通过 ServiceLoader 或反射加载插件实现。
  */
 object PluginRegistry {
-    private val plugins = mutableMapOf<String, PluginComicProvider>()
+    private val plugins = ConcurrentHashMap<String, PluginComicProvider>()
 
     fun register(provider: PluginComicProvider) {
         plugins[provider.pluginId] = provider

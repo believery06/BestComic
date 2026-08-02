@@ -6,42 +6,113 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
-import kotlin.math.PI
 import kotlin.math.pow
 
 object ImageUtils {
 
     private const val WHITE_THRESHOLD = 235
-    private const val MAX_BITMAP_DIMENSION = 4096
+    private const val EDGE_RATIO = 0.05
 
+    /**
+     * 安全创建 Bitmap，优先使用指定 config；OOM 时降级到 RGB_565，仍失败则返回 null。
+     * 避免滤镜链路中一张大图分配失败就导致整个阅读器崩溃。
+     */
+    private fun createBitmapSafe(width: Int, height: Int, preferredConfig: Bitmap.Config): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        return try {
+            Bitmap.createBitmap(width, height, preferredConfig)
+        } catch (_: OutOfMemoryError) {
+            if (preferredConfig == Bitmap.Config.RGB_565) null
+            else try {
+                Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+            } catch (_: OutOfMemoryError) {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 按百分比手动裁切四边边距，用于精确切除扫描装订空白或多余边框。
+     * [topPct]、[bottomPct]、[leftPct]、[rightPct] 为 0–100 的整数百分比。
+     */
+    fun cropMargins(
+        src: Bitmap,
+        topPct: Int = 0,
+        bottomPct: Int = 0,
+        leftPct: Int = 0,
+        rightPct: Int = 0
+    ): Bitmap {
+        val width = src.width
+        val height = src.height
+        if (width < 2 || height < 2) return src
+        val top = (height * topPct / 100f).toInt().coerceIn(0, height - 1)
+        val bottom = (height * bottomPct / 100f).toInt().coerceIn(0, height - 1 - top)
+        val left = (width * leftPct / 100f).toInt().coerceIn(0, width - 1)
+        val right = (width * rightPct / 100f).toInt().coerceIn(0, width - 1 - left)
+        val cropWidth = max(1, width - left - right)
+        val cropHeight = max(1, height - top - bottom)
+        return safeCreateBitmap(src, left, top, cropWidth, cropHeight)
+    }
+
+    // 仅扫描上下左右各 5% 的边缘区域，避免大图的逐像素全扫描
     fun autoCropWhiteBorders(src: Bitmap): Bitmap {
         val width = src.width
         val height = src.height
         if (width < 10 || height < 10) return src
 
         return try {
-            val pixels = IntArray(width * height)
-            src.getPixels(pixels, 0, width, 0, 0, width, height)
+            val topRows = (height * EDGE_RATIO).toInt().coerceAtLeast(1)
+            val bottomRows = (height * EDGE_RATIO).toInt().coerceAtLeast(1)
+            val leftCols = (width * EDGE_RATIO).toInt().coerceAtLeast(1)
+            val rightCols = (width * EDGE_RATIO).toInt().coerceAtLeast(1)
+
+            // 读取上下边缘行
+            val topBottomPixels = IntArray(width * (topRows + bottomRows))
+            src.getPixels(topBottomPixels, 0, width, 0, 0, width, topRows)
+            if (bottomRows > 0) {
+                src.getPixels(topBottomPixels, width * topRows, width, 0, height - bottomRows, width, bottomRows)
+            }
 
             var top = 0
             var bottom = height - 1
+            for (r in 0 until topRows) {
+                if (isRowWhite(topBottomPixels, width, r, leftCols, width - 1 - rightCols)) top++ else break
+            }
+            for (r in 0 until bottomRows) {
+                val row = height - 1 - r
+                // 底部行在 topBottomPixels 中从 topRows 开始，倒序存放
+                val arrayRow = topRows + bottomRows - 1 - r
+                if (row > top && isRowWhite(topBottomPixels, width, arrayRow, leftCols, width - 1 - rightCols)) bottom-- else break
+            }
+
+            // 读取左右边缘列
+            val leftPixels = IntArray(leftCols * height)
+            val rightPixels = IntArray(rightCols * height)
+            src.getPixels(leftPixels, 0, leftCols, 0, 0, leftCols, height)
+            if (rightCols > 0) {
+                src.getPixels(rightPixels, 0, rightCols, width - rightCols, 0, rightCols, height)
+            }
+
             var left = 0
             var right = width - 1
-
-            while (top < height && isRowWhite(pixels, width, top, 0.95f)) top++
-            while (bottom > top && isRowWhite(pixels, width, bottom, 0.95f)) bottom--
-            while (left < width && isColumnWhite(pixels, width, height, left, top, bottom, 0.95f)) left++
-            while (right > left && isColumnWhite(pixels, width, height, right, top, bottom, 0.95f)) right--
+            for (c in 0 until leftCols) {
+                if (isColumnWhite(leftPixels, leftCols, c, top, bottom)) left++ else break
+            }
+            for (c in 0 until rightCols) {
+                val col = width - 1 - c
+                if (col < left) break
+                if (isColumnWhite(rightPixels, rightCols, c, top, bottom)) right-- else break
+            }
 
             val margin = 2
-            top = max(0, top - margin)
-            bottom = min(height - 1, bottom + margin)
-            left = max(0, left - margin)
-            right = min(width - 1, right + margin)
+            top = (top - margin).coerceAtLeast(0)
+            bottom = (bottom + margin).coerceAtMost(height - 1)
+            left = (left - margin).coerceAtLeast(0)
+            right = (right + margin).coerceAtMost(width - 1)
 
             if (top <= 1 && bottom >= height - 2 && left <= 1 && right >= width - 2) {
                 return src
@@ -52,88 +123,201 @@ object ImageUtils {
 
             safeCreateBitmap(src, left, top, cropWidth, cropHeight)
         } catch (e: OutOfMemoryError) {
-            System.gc()
             src
         } catch (e: Exception) {
             src
         }
     }
 
-    private fun isRowWhite(pixels: IntArray, width: Int, row: Int, threshold: Float = 0.98f): Boolean {
-        val start = row * width
-        val end = min(start + width, pixels.size)
+    private fun isRowWhite(pixels: IntArray, width: Int, row: Int, startCol: Int, endCol: Int): Boolean {
+        val s = row * width + startCol.coerceIn(0, width - 1)
+        val e = row * width + endCol.coerceIn(0, width - 1)
+        val lo = min(s, e)
+        val hi = max(s, e)
         var whiteCount = 0
-        val total = end - start
-        for (x in start until end) {
+        val total = hi - lo + 1
+        for (x in lo..hi) {
             if (isWhite(pixels[x])) whiteCount++
         }
-        return total > 0 && whiteCount.toFloat() / total >= threshold
+        return total > 0 && whiteCount.toFloat() / total >= 0.95f
     }
 
-    private fun isColumnWhite(pixels: IntArray, width: Int, height: Int, col: Int, top: Int = 0, bottom: Int = height - 1, threshold: Float = 0.98f): Boolean {
+    private fun isColumnWhite(pixels: IntArray, width: Int, col: Int, top: Int, bottom: Int): Boolean {
         var whiteCount = 0
         var total = 0
-        for (y in top..bottom) {
-            val idx = y * width + col
+        val c = col.coerceIn(0, width - 1)
+        val lo = min(top, bottom)
+        val hi = max(top, bottom)
+        for (y in lo..hi) {
+            val idx = y * width + c
             if (idx in pixels.indices) {
                 total++
                 if (isWhite(pixels[idx])) whiteCount++
             }
         }
-        return total > 0 && whiteCount.toFloat() / total >= threshold
+        return total > 0 && whiteCount.toFloat() / total >= 0.95f
     }
 
-    private fun isWhite(color: Int): Boolean {
+    fun isWhite(color: Int): Boolean {
         val r = (color shr 16) and 0xFF
         val g = (color shr 8) and 0xFF
         val b = color and 0xFF
-        val a = (color shr 24) and 0xFF
-        if (a < 128) return true
         return r >= WHITE_THRESHOLD && g >= WHITE_THRESHOLD && b >= WHITE_THRESHOLD
-    }
-
-    fun scaleBitmap(src: Bitmap, newWidth: Int, newHeight: Int, filter: com.mangareader.data.ScaleFilter): Bitmap {
-        if (newWidth <= 0 || newHeight <= 0) return src
-        if (newWidth == src.width && newHeight == src.height) return src
-        return try {
-            Bitmap.createScaledBitmap(src, newWidth, newHeight, true)
-        } catch (e: OutOfMemoryError) {
-            System.gc()
-            try {
-                val config = Bitmap.Config.RGB_565
-                val tmp = src.copy(config, false)
-                val result = Bitmap.createScaledBitmap(tmp, newWidth, newHeight, true)
-                tmp.recycle()
-                result
-            } catch (e2: Exception) {
-                src
-            }
-        }
     }
 
     private fun safeCreateBitmap(src: Bitmap, x: Int, y: Int, w: Int, h: Int): Bitmap {
         return try {
             Bitmap.createBitmap(src, x, y, w, h)
         } catch (e: OutOfMemoryError) {
-            System.gc()
-            try {
-                val scaled = Bitmap.createScaledBitmap(src, (src.width * 0.75f).toInt(), (src.height * 0.75f).toInt(), true)
-                val sx = (x * 0.75f).toInt()
-                val sy = (y * 0.75f).toInt()
-                val sw = min((w * 0.75f).toInt(), scaled.width - sx)
-                val sh = min((h * 0.75f).toInt(), scaled.height - sy)
-                if (sw > 0 && sh > 0) Bitmap.createBitmap(scaled, sx, sy, sw, sh) else src
-            } catch (e2: Exception) {
-                src
+            src
+        } catch (e: Exception) {
+            src
+        }
+    }
+
+    fun scaleForScreen(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+        if (src.width == targetWidth && src.height == targetHeight) return src
+        return try {
+            Bitmap.createScaledBitmap(src, targetWidth, targetHeight, true)
+        } catch (e: Throwable) {
+            src
+        }
+    }
+
+    fun applyFilters(
+        src: Bitmap,
+        brightness: Float = 1f,
+        contrast: Float = 1f,
+        gamma: Float = 1f,
+        saturation: Float = 1f,
+        grayscale: Boolean = false,
+        mirror: Boolean = false,
+        rotation: Int = 0
+    ): Bitmap {
+        val width = src.width
+        val height = src.height
+        if (width <= 0 || height <= 0) return src
+
+        // 无任何图像变换时直接返回原图，避免为阅读器主页/默认状态分配额外 Bitmap。
+        if (brightness == 1f && contrast == 1f && gamma == 1f && saturation == 1f &&
+            !grayscale && !mirror && rotation == 0
+        ) {
+            return src
+        }
+
+        return try {
+            val result = createBitmapSafe(width, height, Bitmap.Config.ARGB_8888) ?: return src
+            val canvas = Canvas(result)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+            val colorMatrix = ColorMatrix()
+
+            if (brightness != 1f || contrast != 1f || gamma != 1f) {
+                val cm = ColorMatrix()
+                if (brightness != 1f) {
+                    cm.set(
+                        floatArrayOf(
+                            brightness, 0f, 0f, 0f, 0f,
+                            0f, brightness, 0f, 0f, 0f,
+                            0f, 0f, brightness, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f
+                        )
+                    )
+                    colorMatrix.postConcat(cm)
+                }
+                if (contrast != 1f) {
+                    val scale = contrast
+                    val translate = (-0.5f * scale + 0.5f) * 255f
+                    cm.set(
+                        floatArrayOf(
+                            scale, 0f, 0f, 0f, translate,
+                            0f, scale, 0f, 0f, translate,
+                            0f, 0f, scale, 0f, translate,
+                            0f, 0f, 0f, 1f, 0f
+                        )
+                    )
+                    colorMatrix.postConcat(cm)
+                }
             }
+
+            if (saturation != 1f) {
+                val cm = ColorMatrix()
+                cm.setSaturation(saturation)
+                colorMatrix.postConcat(cm)
+            }
+
+            if (grayscale) {
+                val cm = ColorMatrix()
+                cm.setSaturation(0f)
+                colorMatrix.postConcat(cm)
+            }
+
+            paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+
+            val matrix = Matrix()
+            if (mirror) {
+                matrix.postScale(-1f, 1f)
+                matrix.postTranslate(width.toFloat(), 0f)
+            }
+            if (rotation != 0) {
+                matrix.postRotate(rotation.toFloat())
+                if (rotation == 90 || rotation == 270) {
+                    matrix.postTranslate(
+                        if (rotation == 90) width.toFloat() else 0f,
+                        if (rotation == 270) height.toFloat() else 0f
+                    )
+                }
+            }
+
+            canvas.drawBitmap(src, matrix, paint)
+            // ColorMatrix 无法直接表达 gamma，需通过像素级 LUT 后处理；仅开启时执行。
+            if (gamma != 1f) {
+                applyGammaLutInPlace(result, gamma)
+            }
+            result
+        } catch (e: Throwable) {
+            // 兜底：OOM、Skia 异常、参数非法等均返回原图，避免阅读器崩溃。
+            src
+        }
+    }
+
+    /**
+     * 对位图原地应用 gamma LUT，避免额外分配一张新位图。
+     * 仅处理 RGB 通道，保留 Alpha。
+     */
+    private fun applyGammaLutInPlace(bitmap: Bitmap, gamma: Float) {
+        if (gamma == 1f) return
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) return
+        try {
+            val invGamma = 1f / gamma
+            val lut = FloatArray(256) { i ->
+                (255f * (i / 255f).toDouble().pow(invGamma.toDouble())).toFloat().coerceIn(0f, 255f)
+            }
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+            for (i in pixels.indices) {
+                val c = pixels[i]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val nr = lut[r].toInt()
+                val ng = lut[g].toInt()
+                val nb = lut[b].toInt()
+                pixels[i] = (c and 0xFF000000.toInt()) or (nr shl 16) or (ng shl 8) or nb
+            }
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        } catch (_: Throwable) {
+            // 原地 gamma 失败时不影响原图显示
         }
     }
 
     fun applyAdjustments(
         src: Bitmap,
-        brightness: Float,
-        contrast: Float,
-        rotation: Int,
+        brightness: Float = 1f,
+        contrast: Float = 1f,
+        rotation: Int = 0,
         grayscale: Boolean = false,
         sharpen: Boolean = false,
         gamma: Float = 1f,
@@ -145,206 +329,145 @@ object ImageUtils {
         denoiseStrength: Float = 1f,
         mirror: Boolean = false
     ): Bitmap {
-        var work = src
-        val rot = ((rotation % 360) + 360) % 360
-        if (rot != 0 || mirror) {
-            work = transformBitmap(work, rot, mirror)
-        }
-
-        val needColorAdjust = grayscale || sharpen || brightness != 1f || contrast != 1f ||
-                gamma != 1f || denoise || saturation != 1f || nightMode || eyeCare
-
-        if (!needColorAdjust) {
-            return work
-        }
-
-        return try {
-            val config = if (work.config == Bitmap.Config.RGB_565) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-            var out = Bitmap.createBitmap(work.width, work.height, config)
-            val canvas = Canvas(out)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
-                isAntiAlias = true
-                isFilterBitmap = true
-                isDither = true
-                colorFilter = ColorMatrixColorFilter(
-                    buildColorMatrix(grayscale, brightness, contrast, saturation, nightMode, eyeCare)
-                )
-            }
-            canvas.drawBitmap(work, 0f, 0f, paint)
-            if (work != src && work != out) work.recycle()
-
-            out
-        } catch (e: OutOfMemoryError) {
-            System.gc()
-            work
-        }
-    }
-
-    private fun transformBitmap(src: Bitmap, rotation: Int, mirror: Boolean): Bitmap {
-        return try {
-            val matrix = Matrix()
-            if (mirror) matrix.preScale(-1f, 1f)
-            if (rotation != 0) matrix.postRotate(rotation.toFloat())
-            Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
-        } catch (e: OutOfMemoryError) {
-            System.gc()
-            try {
-                val scaled = Bitmap.createScaledBitmap(src, src.width / 2, src.height / 2, true)
-                val matrix = Matrix()
-                if (mirror) matrix.preScale(-1f, 1f)
-                if (rotation != 0) matrix.postRotate(rotation.toFloat())
-                Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, matrix, true)
-            } catch (e2: Exception) {
-                src
-            }
-        }
-    }
-
-    private fun buildColorMatrix(
-        grayscale: Boolean,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float,
-        nightMode: Boolean,
-        eyeCare: Boolean
-    ): ColorMatrix {
-        val cm = ColorMatrix()
-
-        if (grayscale) {
-            cm.setSaturation(0f)
-        } else if (saturation != 1f) {
-            cm.setSaturation(saturation.coerceIn(0f, 2f))
-        }
-
-        val c = contrast.coerceIn(0.5f, 2f)
-        val t = (1f - c) * 128f
-        val contrastMatrix = ColorMatrix(
-            floatArrayOf(
-                c, 0f, 0f, 0f, t,
-                0f, c, 0f, 0f, t,
-                0f, 0f, c, 0f, t,
-                0f, 0f, 0f, 1f, 0f
-            )
+        var result = applyFilters(
+            src = src,
+            brightness = brightness,
+            contrast = contrast,
+            gamma = gamma,
+            saturation = saturation,
+            grayscale = grayscale,
+            mirror = mirror,
+            rotation = rotation
         )
-        cm.postConcat(contrastMatrix)
-
-        if (brightness != 1f) {
-            val bOffset = (brightness.coerceIn(0.5f, 2f) - 1f) * 255f
-            val brightnessMatrix = ColorMatrix(
-                floatArrayOf(
-                    1f, 0f, 0f, 0f, bOffset,
-                    0f, 1f, 0f, 0f, bOffset,
-                    0f, 0f, 1f, 0f, bOffset,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            cm.postConcat(brightnessMatrix)
+        // 滤镜链路中会产生多个中间 Bitmap；在获得下一步输出后及时回收中间结果，
+        // 但绝不应回收原始 src（可能来自页面缓存或 Coil，生命周期由调用方管理）。
+        fun advance(next: (Bitmap) -> Bitmap): Bitmap {
+            val out = next(result)
+            if (out !== result && result !== src) {
+                runCatching { if (!result.isRecycled) result.recycle() }
+            }
+            return out
         }
 
-        if (nightMode) {
-            val nightMatrix = ColorMatrix(
-                floatArrayOf(
-                    0.6f, 0f, 0f, 0f, 0f,
-                    0f, 0.6f, 0f, 0f, 0f,
-                    0f, 0f, 0.6f, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            cm.postConcat(nightMatrix)
+        if (nightMode || eyeCare) {
+            val tintColor = if (nightMode) 0x80FF8800.toInt() else 0x80FFFF88.toInt()
+            result = advance { tintBitmap(it, tintColor) }
         }
-
-        if (eyeCare) {
-            val eyeCareMatrix = ColorMatrix(
-                floatArrayOf(
-                    1.08f, 0f, 0f, 0f, 8f,
-                    0f, 1.04f, 0f, 0f, 4f,
-                    0f, 0f, 0.85f, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            cm.postConcat(eyeCareMatrix)
+        if (sharpen && sharpenStrength > 0f) {
+            result = advance { sharpenBitmap(it, sharpenStrength) }
         }
-
-        return cm
+        if (denoise && denoiseStrength > 0f) {
+            result = advance { denoiseBitmap(it, denoiseStrength) }
+        }
+        return result
     }
 
-
-
-    /**
-     * 生成漫画分享卡片：自动加边框、漫画名 + 页码水印、"来自 XX 阅读器" 角标。
-     * 返回保存后的 PNG 文件，调用方负责分享或展示。
-     *
-     * @param src 当前页面位图（不会被回收）
-     * @param comicTitle 漫画标题
-     * @param pageNumber 当前页码（1-based）
-     * @param appName 应用名称，用于角标
-     */
-    fun createShareCard(
-        src: Bitmap,
-        comicTitle: String,
-        pageNumber: Int,
-        appName: String
-    ): Bitmap? {
-        if (src.isRecycled) return null
+    private fun tintBitmap(src: Bitmap, tintColor: Int): Bitmap {
+        val width = src.width
+        val height = src.height
         return try {
-            val maxDim = 1600
-            val scale = if (maxOf(src.width, src.height) > maxDim) {
-                maxDim.toFloat() / maxOf(src.width, src.height)
-            } else 1f
-            val imgW = (src.width * scale).toInt()
-            val imgH = (src.height * scale).toInt()
-            val img = if (scale < 1f) Bitmap.createScaledBitmap(src, imgW, imgH, true) else src
-
-            val padding = 32
-            val footerH = 96
-            val width = imgW + padding * 2
-            val height = imgH + padding * 2 + footerH
-
-            val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val result = createBitmapSafe(width, height, Bitmap.Config.ARGB_8888) ?: return src
             val canvas = Canvas(result)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            canvas.drawBitmap(src, 0f, 0f, null)
+            val paint = Paint().apply {
+                colorFilter = android.graphics.PorterDuffColorFilter(tintColor, android.graphics.PorterDuff.Mode.SRC_ATOP)
+            }
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            result
+        } catch (e: Throwable) {
+            src
+        }
+    }
 
-            // 背景：拍立得风格白底
-            canvas.drawColor(android.graphics.Color.WHITE)
-
-            // 轻微阴影边框
-            paint.color = android.graphics.Color.parseColor("#FFE0E0E0")
-            canvas.drawRect(
-                (padding - 4).toFloat(),
-                (padding - 4).toFloat(),
-                (width - padding + 4).toFloat(),
-                (imgH + padding + 4).toFloat(),
-                paint
+    private fun sharpenBitmap(src: Bitmap, strength: Float): Bitmap {
+        val width = src.width
+        val height = src.height
+        if (width <= 0 || height <= 0) return src
+        return try {
+            val result = createBitmapSafe(width, height, Bitmap.Config.ARGB_8888) ?: return src
+            val canvas = Canvas(result)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val cm = ColorMatrix()
+            val s = strength.coerceIn(0f, 3f)
+            cm.set(
+                floatArrayOf(
+                    1 + s, -s / 2, 0f, 0f, 0f,
+                    -s / 2, 1 + s, -s / 2, 0f, 0f,
+                    0f, -s / 2, 1 + s, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f
+                )
             )
+            paint.colorFilter = ColorMatrixColorFilter(cm)
+            canvas.drawBitmap(src, 0f, 0f, paint)
+            result
+        } catch (e: Throwable) {
+            src
+        }
+    }
 
-            // 图片
-            canvas.drawBitmap(img, padding.toFloat(), padding.toFloat(), paint)
+    private fun denoiseBitmap(src: Bitmap, strength: Float): Bitmap {
+        val width = src.width
+        val height = src.height
+        if (width <= 0 || height <= 0) return src
+        return fastBlur(src, strength.coerceIn(1f, 10f).toInt())
+    }
 
-            // 底部文字
-            paint.color = android.graphics.Color.BLACK
-            paint.textSize = 28f
-            val titleText = comicTitle.take(26) + if (comicTitle.length > 26) "..." else ""
-            canvas.drawText(titleText, padding.toFloat(), (height - footerH + 36).toFloat(), paint)
+    private fun fastBlur(src: Bitmap, radius: Int): Bitmap {
+        val r = radius.coerceAtLeast(1)
+        if (r <= 0) return src
+        var b = src
+        repeat(min(r, 5)) {
+            val w = b.width
+            val h = b.height
+            if (w <= 1 || h <= 1) return b
+            val out = createBitmapSafe(max(1, w / 2), max(1, h / 2), Bitmap.Config.ARGB_8888) ?: return b
+            val canvas = Canvas(out)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+            val matrix = Matrix().apply { postScale(0.5f, 0.5f) }
+            canvas.drawBitmap(b, matrix, paint)
+            // 只回收 fastBlur 自己产生的中间 Bitmap，绝不回收调用方传入的原始 src。
+            if (b !== src && !b.isRecycled) runCatching { b.recycle() }
+            b = out
+        }
+        return b
+    }
 
-            paint.textSize = 22f
-            paint.color = android.graphics.Color.DKGRAY
-            canvas.drawText("第 $pageNumber 页", padding.toFloat(), (height - footerH + 72).toFloat(), paint)
-
-            // 右上角角标
-            paint.textSize = 20f
-            paint.color = android.graphics.Color.parseColor("#FF666666")
-            val badge = "来自 $appName"
-            val badgeWidth = paint.measureText(badge)
-            canvas.drawText(badge, (width - padding - badgeWidth), (height - footerH + 72).toFloat(), paint)
-
-            // 释放临时缩放的图片（如果创建了新的）
-            if (img !== src && !img.isRecycled) img.recycle()
+    fun createShareCard(src: Bitmap, comicTitle: String, pageLabel: String, appName: String): Bitmap? {
+        return try {
+            val cardWidth = 800
+            val cardHeight = 1200
+            val srcAspect = src.width.toFloat() / src.height.toFloat()
+            val targetAspect = cardWidth.toFloat() / cardHeight
+            val drawWidth: Int
+            val drawHeight: Int
+            if (srcAspect > targetAspect) {
+                drawWidth = cardWidth
+                drawHeight = (cardWidth / srcAspect).toInt()
+            } else {
+                drawHeight = cardHeight
+                drawWidth = (cardHeight * srcAspect).toInt()
+            }
+            val result = Bitmap.createBitmap(cardWidth, cardHeight, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(result)
+            canvas.drawColor(0xFF121212.toInt())
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val dstRect = android.graphics.Rect(
+                (cardWidth - drawWidth) / 2,
+                (cardHeight - drawHeight) / 2,
+                (cardWidth + drawWidth) / 2,
+                (cardHeight + drawHeight) / 2
+            )
+            canvas.drawBitmap(src, null, dstRect, paint)
+            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFFFFFFFF.toInt()
+                textSize = 32f
+            }
+            canvas.drawText(comicTitle, 30f, 50f, textPaint)
+            canvas.drawText(pageLabel, 30f, 90f, textPaint)
+            textPaint.textSize = 24f
+            canvas.drawText(appName, 3f, cardHeight - 20f, textPaint)
             result
         } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        } catch (e: OutOfMemoryError) {
-            System.gc()
             null
         }
     }

@@ -7,8 +7,10 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.mangareader.R
 import com.mangareader.data.ComicPage
 import com.mangareader.data.ComicType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -34,9 +36,11 @@ class PdfParser : ComicParser {
 
     companion object {
         private const val TAG = "PdfParser"
-        // 单页像素上限 6M：ARGB_8888 约 24MB/页，3 页 L1 缓存约 72MB。
-        // 在保持清晰可读的前提下，降低中低端设备 OOM 风险。
-        private const val MAX_BITMAP_PIXELS = 2400 * 2400
+        // 默认单页像素上限：手机 1440p，平板 2400p。
+        // 根据屏幕尺寸动态调整，避免一次性渲染超大 Bitmap 导致 OOM 和卡顿。
+        private const val PHONE_MAX_PIXELS = 1440 * 2560
+        private const val TABLET_MAX_PIXELS = 2400 * 3200
+        private const val LOWEND_MAX_PIXELS = 1080 * 1920
     }
 
     // 所有状态用 AtomicReference 持有，避免与 close() 的锁竞争
@@ -46,6 +50,23 @@ class PdfParser : ComicParser {
     // 渲染互斥：PdfRenderer 同一时间只能打开一个 Page
     private val renderLock = Any()
 
+    @Volatile
+    private var screenWidth: Int = 1080
+    @Volatile
+    private var screenHeight: Int = 1920
+    @Volatile
+    private var isTablet: Boolean = false
+    @Volatile
+    private var lowEndDevice: Boolean = false
+
+    /** 根据设备屏幕设置渲染预算，应在 parse 前调用。 */
+    fun setScreenSize(width: Int, height: Int, tablet: Boolean = false, lowEnd: Boolean = false) {
+        screenWidth = width.coerceAtLeast(1)
+        screenHeight = height.coerceAtLeast(1)
+        isTablet = tablet
+        lowEndDevice = lowEnd
+    }
+
     private data class ParserState(
         val renderer: PdfRenderer,
         val pfd: ParcelFileDescriptor,
@@ -54,9 +75,7 @@ class PdfParser : ComicParser {
 
     override fun close() {
         val toClose = synchronized(lifecycleLock) {
-            val s = state.getAndSet(null)
-            state.set(null)
-            s
+            state.getAndSet(null)
         }
         // 在锁外执行 close，PdfRenderer.close 可能阻塞
         if (toClose != null) {
@@ -74,13 +93,15 @@ class PdfParser : ComicParser {
 
         val newState: ParserState? = try {
             openPdfRenderer(context, uri)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "PDF open failed: $uri", e)
-            return@withContext ParserResult.Error("无法打开 PDF：${friendlyMessage(e)}")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_pdf_error, friendlyMessage(e)))
         }
 
         if (newState == null) {
-            return@withContext ParserResult.Error("无法打开 PDF：未知原因")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_pdf_unknown_reason))
         }
 
         // 提交新状态
@@ -90,26 +111,28 @@ class PdfParser : ComicParser {
                 runCatching { newState.renderer.close() }
                 runCatching { newState.pfd.close() }
                 newState.tempFile?.let { runCatching { it.delete() } }
-                return@withContext ParserResult.Error("PDF 解析被取消")
+                return@withContext ParserResult.Error(context.getString(R.string.parser_pdf_cancelled))
             }
             state.set(newState)
         }
 
         val pageCount = try {
             newState.renderer.pageCount
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "pageCount failed", e)
             runCatching { newState.renderer.close() }
             runCatching { newState.pfd.close() }
             newState.tempFile?.let { runCatching { it.delete() } }
-            return@withContext ParserResult.Error("PDF 读取失败：${friendlyMessage(e)}")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_pdf_read_error, friendlyMessage(e)))
         }
 
         if (pageCount <= 0) {
             runCatching { newState.renderer.close() }
             runCatching { newState.pfd.close() }
             newState.tempFile?.let { runCatching { it.delete() } }
-            return@withContext ParserResult.Error("PDF 没有页面")
+            return@withContext ParserResult.Error(context.getString(R.string.parser_pdf_no_pages))
         }
 
         // 直接持有 state 引用，不再通过 this.state 间接访问
@@ -129,13 +152,15 @@ class PdfParser : ComicParser {
 
     private fun openPdfRenderer(context: Context, uri: Uri): ParserState? {
         // 策略1：直接 openFileDescriptor
-        val strategy1 = tryOpenWithPfd(context, uri)
-        if (strategy1 != null) return strategy1
+        tryOpenWithPfd(context, uri)?.let { return it }
 
         Log.w(TAG, "Strategy 1 failed, trying temp file strategy")
         // 策略2：复制到 cacheDir 后打开
-        val strategy2 = tryOpenWithTempFile(context, uri)
-        if (strategy2 != null) return strategy2
+        tryOpenWithTempFile(context, context.cacheDir, uri)?.let { return it }
+
+        // 策略3：复制到 files 目录后打开（cacheDir 可能空间不足或被清理）
+        Log.w(TAG, "Strategy 2 failed, trying files dir strategy")
+        tryOpenWithTempFile(context, context.filesDir, uri)?.let { return it }
 
         return null
     }
@@ -148,8 +173,19 @@ class PdfParser : ComicParser {
                 Log.w(TAG, "openFileDescriptor returned null")
                 return null
             }
-            val renderer = PdfRenderer(pfd)
-            ParserState(renderer, pfd, null)
+            // 某些设备 PdfRenderer 会持有 fd 并在内部读取，dup 一份避免被外部关闭影响
+            val dupPfd = try {
+                pfd.dup()
+            } catch (_: Throwable) {
+                pfd
+            }
+            if (dupPfd !== pfd) {
+                runCatching { pfd.close() }
+            }
+            val renderer = PdfRenderer(dupPfd)
+            ParserState(renderer, dupPfd, null)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.w(TAG, "tryOpenWithPfd failed: ${e.message}")
             runCatching { pfd?.close() }
@@ -157,34 +193,38 @@ class PdfParser : ComicParser {
         }
     }
 
-    private fun tryOpenWithTempFile(context: Context, uri: Uri): ParserState? {
+    private fun tryOpenWithTempFile(context: Context, dir: File, uri: Uri): ParserState? {
         var tempFile: File? = null
         var tempPfd: ParcelFileDescriptor? = null
         return try {
-            tempFile = File.createTempFile("pdf_", ".pdf", context.cacheDir)
+            tempFile = File.createTempFile("pdf_", ".pdf", dir)
 
             val bytesWritten = try {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output, 131072)
+                        input.copyTo(output, 262144)
                     }
                 }
                 tempFile.length()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 Log.w(TAG, "Copy to temp file failed: ${e.message}")
                 -1L
             }
 
             if (bytesWritten <= 0L) {
-                tempFile?.delete()
+                tempFile.delete()
                 return null
             }
 
             tempPfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
             val renderer = PdfRenderer(tempPfd)
             ParserState(renderer, tempPfd, tempFile)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
-            Log.e(TAG, "tryOpenWithTempFile failed", e)
+            Log.e(TAG, "tryOpenWithTempFile failed dir=${dir.name}: ${e.message}")
             runCatching { tempPfd?.close() }
             tempFile?.delete()
             null
@@ -200,54 +240,110 @@ class PdfParser : ComicParser {
 
         synchronized(renderLock) {
             var page: PdfRenderer.Page? = null
-            try {
-                page = renderer.openPage(pageIndex) ?: return null
-                val pageWidth = page.width
-                val pageHeight = page.height
-                if (pageWidth <= 0 || pageHeight <= 0) return null
+            var retryCount = 0
+            val maxRetries = 2
 
-                val scale = calculateRenderScale(pageWidth, pageHeight)
-                val bmpWidth = (pageWidth * scale).toInt().coerceAtLeast(1)
-                val bmpHeight = (pageHeight * scale).toInt().coerceAtLeast(1)
-
-                // Android 新版 PdfRenderer.render() 不接受 RGB_565，必须 ARGB_8888
-                val bitmap = try {
-                    Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
-                } catch (e: OutOfMemoryError) {
-                    Log.e(TAG, "createBitmap OOM page=$pageIndex ${bmpWidth}x${bmpHeight}, retrying at half scale", e)
-                    val halfScale = scale * 0.5f
-                    val hw = (pageWidth * halfScale).toInt().coerceAtLeast(1)
-                    val hh = (pageHeight * halfScale).toInt().coerceAtLeast(1)
-                    try {
-                        Bitmap.createBitmap(hw, hh, Bitmap.Config.ARGB_8888)
-                    } catch (e2: OutOfMemoryError) {
-                        Log.e(TAG, "createBitmap OOM at half size, giving up", e2)
+            while (retryCount <= maxRetries) {
+                try {
+                    page = renderer.openPage(pageIndex) ?: return null
+                    val pageWidth = page.width
+                    val pageHeight = page.height
+                    if (pageWidth <= 0 || pageHeight <= 0) {
+                        runCatching { page.close() }
                         return null
                     }
-                }
 
-                val canvas = android.graphics.Canvas(bitmap)
-                canvas.drawColor(Color.WHITE)
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                return bitmap
-            } catch (e: Throwable) {
-                Log.e(TAG, "renderPage failed index=$pageIndex", e)
-                return null
-            } finally {
-                runCatching { page?.close() }
+                    val scale = calculateRenderScale(pageWidth, pageHeight)
+                    val bmpWidth = (pageWidth * scale).toInt().coerceAtLeast(1)
+                    val bmpHeight = (pageHeight * scale).toInt().coerceAtLeast(1)
+
+                    // Android 新版 PdfRenderer.render() 不接受 RGB_565，必须 ARGB_8888
+                    val bitmap = try {
+                        Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
+                    } catch (e: OutOfMemoryError) {
+                        Log.w(TAG, "createBitmap OOM page=$pageIndex ${bmpWidth}x${bmpHeight}, trying lower scale")
+                        val reducedScale = if (retryCount == 0) scale * 0.7f else scale * 0.5f
+                        val rw = (pageWidth * reducedScale).toInt().coerceAtLeast(1)
+                        val rh = (pageHeight * reducedScale).toInt().coerceAtLeast(1)
+                        try {
+                            Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
+                        } catch (e2: OutOfMemoryError) {
+                            runCatching { page.close() }
+                            if (retryCount < maxRetries) {
+                                retryCount++
+                                continue
+                            }
+                            Log.e(TAG, "createBitmap OOM, giving up page=$pageIndex", e2)
+                            return null
+                        }
+                    }
+
+                    val canvas = android.graphics.Canvas(bitmap)
+                    canvas.drawColor(Color.WHITE)
+
+                    val destRect = android.graphics.Rect(0, 0, bitmap.width, bitmap.height)
+                    page.render(bitmap, destRect, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+                    runCatching { page.close() }
+                    return bitmap
+                } catch (e: IllegalStateException) {
+                    // PdfRenderer 可能已关闭或处于无效状态
+                    Log.w(TAG, "renderPage IllegalStateException page=$pageIndex, retry=$retryCount", e)
+                    runCatching { page?.close() }
+                    if (retryCount < maxRetries) {
+                        retryCount++
+                        continue
+                    }
+                    return null
+                } catch (e: java.lang.RuntimeException) {
+                    // 某些 PDF 页面 render 会抛出 RuntimeException（如 trying to use a recycled bitmap）
+                    Log.w(TAG, "renderPage RuntimeException page=$pageIndex, retry=$retryCount", e)
+                    runCatching { page?.close() }
+                    if (retryCount < maxRetries) {
+                        retryCount++
+                        continue
+                    }
+                    return null
+                } catch (e: CancellationException) {
+                    runCatching { page?.close() }
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "renderPage failed index=$pageIndex", e)
+                    runCatching { page?.close() }
+                    return null
+                }
             }
+            return null
         }
     }
 
     /**
-     * 根据页面实际尺寸计算渲染倍率，保证像素数不超过 [MAX_BITMAP_PIXELS]。
+     * 根据页面实际尺寸、屏幕尺寸和设备性能计算渲染倍率。
+     * 优先保证渲染宽度不超过屏幕物理宽度的 1.5 倍（手机 1440p，平板 2400p，低端机 1080p），
+     * 避免一次性光栅化超大 Bitmap 导致 CPU 耗时和 OOM。
      */
     private fun calculateRenderScale(pageWidth: Int, pageHeight: Int): Float {
-        val targetPixels = MAX_BITMAP_PIXELS.toFloat()
         val pagePixels = pageWidth.toFloat() * pageHeight.toFloat()
         if (pagePixels <= 0f) return 1f
-        val scale = kotlin.math.sqrt(targetPixels / pagePixels)
-        return scale.coerceIn(0.5f, 2.0f)
+
+        val maxPixels = when {
+            lowEndDevice -> LOWEND_MAX_PIXELS
+            isTablet -> TABLET_MAX_PIXELS
+            else -> PHONE_MAX_PIXELS
+        }.toFloat()
+
+        // 限制最大渲染宽度，避免文字型 PDF 过度渲染
+        val maxRenderWidth = when {
+            lowEndDevice -> 1080f
+            isTablet -> 2400f
+            else -> 1440f
+        }
+        val widthScale = maxRenderWidth / pageWidth.toFloat()
+
+        // 限制总像素数
+        val pixelScale = kotlin.math.sqrt(maxPixels / pagePixels)
+
+        return kotlin.math.min(widthScale, pixelScale).coerceIn(0.4f, 2.0f)
     }
 
     private fun friendlyMessage(e: Throwable): String {

@@ -1,7 +1,7 @@
 package com.mangareader.data
 
 import android.net.Uri
-import com.mangareader.provider.ComicProvider
+import androidx.compose.runtime.Immutable
 
 enum class ComicType {
     CBZ,
@@ -10,6 +10,7 @@ enum class ComicType {
     CBT,
     EPUB,
     PDF,
+    MOBI,
     FOLDER,
     COMIC_BOOK,   // 子目录=漫画，内部多个 PDF/EPUB 等为章节
     UNKNOWN
@@ -21,6 +22,7 @@ enum class ReadingStatus {
     READ      // 已读
 }
 
+@Immutable
 data class ComicEntry(
     val uri: Uri,
     val title: String,
@@ -32,6 +34,7 @@ data class ComicEntry(
     val isDirectory: Boolean = false
 )
 
+@Immutable
 data class ComicPage(
     val index: Int,
     val name: String,
@@ -40,7 +43,9 @@ data class ComicPage(
     val loadStream: suspend () -> java.io.InputStream? = { null },
     val chapterTitle: String = "",
     val providerIndex: Int = index,
-    val provider: ComicProvider? = null
+    val provider: ComicProvider? = null,
+    /** 页面关联的文本内容，用于 TTS 文字朗读。 */
+    val textContent: String = ""
 )
 
 /**
@@ -48,6 +53,7 @@ data class ComicPage(
  * Each chapter is a PDF/EPUB/CBZ/etc. The chapter has its own page list
  * and the Reader concatenates all chapter pages in order.
  */
+@Immutable
 data class ComicChapter(
     val title: String,
     val uri: Uri,
@@ -56,15 +62,15 @@ data class ComicChapter(
 )
 
 /**
- * 用于在 Bookshelf/Browser 和 Reader 之间传递 ComicEntry，避免通过
- * Navigation 路由参数编码/解码 SAF content:// URI（%2F、%3A 会被
- * Uri.decode 破坏）。
+ * 单条阅读历史记录，按最后访问时间倒序排列。
  */
-object ComicHolder {
-    @Volatile
-    var entry: ComicEntry? = null
-
-    /** 当前选中的分卷/分章；Reader 会优先读取该卷页面。 */
-    @Volatile
-    var chapter: ComicChapter? = null
-}
+@Immutable
+@kotlinx.serialization.Serializable
+data class ReadingHistoryEntry(
+    val uriString: String,
+    val title: String,
+    val lastReadAt: Long = 0L,
+    val lastReadPage: Int = 0,
+    val totalPages: Int = 0,
+    val coverUriString: String? = null
+)

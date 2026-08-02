@@ -13,9 +13,8 @@ android {
         applicationId = "com.mangareader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-
+        versionCode = 78
+        versionName = "1.0.78"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -54,6 +53,10 @@ android {
             excludes += "/META-INF/DUMMY.DSA"
         }
     }
+
+    lint {
+        disable += "ObsoleteLintCustomCheck"
+    }
 }
 
 dependencies {
@@ -66,11 +69,13 @@ dependencies {
 
     // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    implementation("androidx.compose.runtime:runtime-saveable")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material:material")
     implementation("androidx.compose.material:material-icons-extended")
 
     // Navigation
@@ -99,12 +104,17 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // Background sync
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("androidx.test:core:1.5.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.02.00"))
