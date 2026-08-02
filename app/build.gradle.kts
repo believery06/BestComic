@@ -13,8 +13,8 @@ android {
         applicationId = "com.mangareader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 78
-        versionName = "1.0.78"
+        versionCode = 80
+        versionName = "1.0.80"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

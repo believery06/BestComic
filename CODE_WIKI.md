@@ -3338,4 +3338,49 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 78，`versionName` 1.0.78。
 - 测试：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过，73 个单元测试通过，Lint 无新增错误/警告。
 
-*文档更新时间：2026-07-27*
+### 13.81 SettingsRepository 二次拆分：五个单一职责 Repository (2026-07-28)
+
+#### 背景
+`SettingsRepository` 在首轮拆分后仍达 1627 行，继续混合书签、收藏、分类、历史、书单、书架、进度等职责。本轮将其彻底拆分为五个专属 Repository。
+
+#### 拆分方案
+1. **`BookmarkRepository.kt`**（210 行）：书签、收藏、分类、漫画分类
+2. **`BookshelfRepository.kt`**（220 行）：书架根目录/URI/索引/视图模式/筛选/排序/搜索/扫描状态
+3. **`ReadingHistoryRepository.kt`**（92 行）：阅读历史、最近阅读、已读/未读标记
+4. **`ComicExtrasRepository.kt`**（84 行）：漫画评分/短评/标签、用户书单
+5. **`ReadingProgressRepository.kt`**（184 行）：阅读进度、总页数
+
+#### Facade 模式
+- `SettingsRepository` 精简至 **971 行**（原 1627 行，减少 40%），保留所有公开方法签名作为 Facade，内部委托给新 Repository。
+- 备份/恢复（`exportAllData`/`importAllData`）因跨 Repository 协调保留在 Facade 中。
+- 所有 Repository 通过 `DataStoreProvider` 共享同一 DataStore，使用 `getInstance(context)` 单例。
+
+#### 相关文件
+- 新增：`data/BookmarkRepository.kt`、`data/BookshelfRepository.kt`、`data/ReadingHistoryRepository.kt`、`data/ComicExtrasRepository.kt`、`data/ReadingProgressRepository.kt`
+- 修改：`data/SettingsRepository.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 80，`versionName` 1.0.80。
+- 测试：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
+### 13.82 BookshelfScreen UI 拆分：提取顶部栏/搜索栏/筛选栏/内容区/对话框 (2026-07-28)
+
+#### 背景
+`BookshelfScreen.kt` 原 1691 行，单 Composable 混合顶部栏、搜索、筛选、内容区、对话框等所有 UI 逻辑。
+
+#### 拆分方案
+1. **`BookshelfTopBar.kt`**（106 行）：顶部栏
+2. **`BookshelfBatchToolbar.kt`**（78 行）：批量操作栏
+3. **`BookshelfSearchBar.kt`**（98 行）：搜索栏 + 搜索历史面板
+4. **`BookshelfFilterBar.kt`**（173 行）：筛选/排序栏 + 分类筛选行
+5. **`BookshelfContent.kt`**（196 行）：内容区（下拉刷新 + 错误/空/网格/列表）
+6. **`BookshelfDialogs.kt`**（526 行）：所有对话框
+
+#### 复用已有组件
+- `BookshelfComicItem.kt`、`BookshelfEmptyStates.kt`、`BookshelfSearchHistory.kt`、`BookshelfExtras.kt`、`GitHubStarDialog.kt`
+
+#### 相关文件
+- 新增：`bookshelf/BookshelfTopBar.kt`、`BookshelfBatchToolbar.kt`、`BookshelfSearchBar.kt`、`BookshelfFilterBar.kt`、`BookshelfContent.kt`、`BookshelfDialogs.kt`
+- 修改：`bookshelf/BookshelfScreen.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 80，`versionName` 1.0.80。
+- 测试：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
+*文档更新时间：2026-07-28*

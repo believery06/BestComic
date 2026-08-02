@@ -57,3 +57,7 @@ obj/
 
 # OS files
 Thumbs.db
+
+# Unrelated projects
+weiqi/
+.broken_ui_backup/

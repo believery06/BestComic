@@ -30,15 +30,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.mangareader.R
-import com.mangareader.data.GestureConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 
-
+/**
+ * Facade Repository：保留阅读设置、备份/恢复等核心能力，
+ * 其余职责委托给各单一职责 Repository（Bookmark / Bookshelf / ReadingHistory / ComicExtras / ReadingProgress）。
+ */
 class SettingsRepository(private val context: Context) {
 
     companion object {
@@ -51,9 +52,6 @@ class SettingsRepository(private val context: Context) {
             }
         }
 
-        private val KEY_PROGRESS_PREFIX = "progress_"
-        private val KEY_PROGRESS_TIME_PREFIX = "progress_time_"
-        private val KEY_TOTAL_PREFIX = "total_"
         private val KEY_DUAL_PAGE = booleanPreferencesKey("dual_page")
         private val KEY_RTL = booleanPreferencesKey("rtl")
         private val KEY_IMMERSIVE = booleanPreferencesKey("immersive")
@@ -68,18 +66,11 @@ class SettingsRepository(private val context: Context) {
         private val KEY_ROTATION = intPreferencesKey("rotation")
         private val KEY_DUAL_PAGE_SPACING = intPreferencesKey("dual_page_spacing")
         private val KEY_AUTO_DUAL_PAGE_LANDSCAPE = booleanPreferencesKey("auto_dual_page_landscape")
-        private val KEY_BOOKSHELF_ROOT = stringPreferencesKey("bookshelf_root")
-        private val KEY_BOOKSHELF_URIS = stringPreferencesKey("bookshelf_uris")
-        private val KEY_CURRENT_BOOKSHELF_INDEX = intPreferencesKey("current_bookshelf_index")
         private val KEY_SCROLL_MODE = stringPreferencesKey("scroll_mode")
         private val KEY_GRAYSCALE = booleanPreferencesKey("grayscale")
         private val KEY_SHARPEN = booleanPreferencesKey("sharpen")
         private val KEY_DENOISE = booleanPreferencesKey("denoise")
         private val KEY_DUAL_PAGE_OFFSET = intPreferencesKey("dual_page_offset")
-        private val KEY_BOOKMARKS = stringPreferencesKey("bookmarks_map")
-        private val KEY_FAVORITES = stringPreferencesKey("favorites_set")
-        private val KEY_CATEGORIES = stringPreferencesKey("categories_list")
-        private val KEY_COMIC_CATEGORIES = stringPreferencesKey("comic_categories")
         private val KEY_ZOOM_MODE = stringPreferencesKey("zoom_mode")
         private val KEY_MIRROR = booleanPreferencesKey("mirror")
         private val KEY_PAGE_SHADOW = booleanPreferencesKey("page_shadow")
@@ -120,62 +111,39 @@ class SettingsRepository(private val context: Context) {
         private val KEY_READER_STATUS_BAR = booleanPreferencesKey("reader_status_bar")
         private val KEY_THUMBNAIL_STRIP = booleanPreferencesKey("thumbnail_strip")
         private val KEY_KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
-        private val KEY_BOOKSHELF_VIEW_MODE = stringPreferencesKey("bookshelf_view_mode")
-        private val KEY_BOOKSHELF_FILTER = stringPreferencesKey("bookshelf_filter")
-        private val KEY_BOOKSHELF_SORT = stringPreferencesKey("bookshelf_sort")
-        private val KEY_BOOKSHELF_SELECTED_CATEGORY = stringPreferencesKey("bookshelf_selected_category")
-        private val KEY_BOOKSHELF_SEARCH_QUERY = stringPreferencesKey("bookshelf_search_query")
-        private val KEY_BOOKSHELF_SEARCHING = booleanPreferencesKey("bookshelf_searching")
-        private val KEY_BOOKSHELF_SEARCH_HISTORY = stringPreferencesKey("bookshelf_search_history")
-        private const val MAX_SEARCH_HISTORY_SIZE = 20
 
-        // 漫画评分、短评、标签
-        private val KEY_COMIC_EXTRAS_PREFIX = "extras_"
-        // 用户书单
-        private val KEY_READING_LISTS = stringPreferencesKey("reading_lists")
-        // 阅读历史
-        private val KEY_READING_HISTORY = stringPreferencesKey("reading_history")
-        private const val MAX_HISTORY_SIZE = 200
+        private val KEY_PROGRESS_PREFIX = "progress_"
+        private val KEY_PROGRESS_TIME_PREFIX = "progress_time_"
+        private val KEY_TOTAL_PREFIX = "total_"
 
-        private const val KEY_BOOKSHELF_SCAN_PREFIX = "bookshelf_scan_"
-
-        // 本地备份版本：导出时写入，导入时校验兼容性
         private const val BACKUP_VERSION = 2
         private const val MIN_SUPPORTED_BACKUP_VERSION = 1
 
-        // 阅读设置迁移版本：递增此值 + 在 readerSettings flow 中添加迁移逻辑
         private const val READER_SETTINGS_VERSION = 2
         private val KEY_READER_SETTINGS_VERSION = intPreferencesKey("reader_settings_version")
 
         private val json = Json { ignoreUnknownKeys = true }
     }
 
-    // 阅读设置异步保存的 Job，按实例隔离，避免多 Repository/多设置项互相取消。
+    private val bookmarkRepository = BookmarkRepository.getInstance(context)
+    private val bookshelfRepository = BookshelfRepository.getInstance(context)
+    private val readingHistoryRepository = ReadingHistoryRepository.getInstance(context)
+    private val comicExtrasRepository = ComicExtrasRepository.getInstance(context)
+    private val readingProgressRepository = ReadingProgressRepository.getInstance(context)
+
     @Volatile
     private var saveJob: Job? = null
-    // 保护 saveJob 的取消、赋值与 flush 写入，防止 saveAsync 与 flushSave 交错导致过期快照覆盖。
     private val saveJobLock = Mutex()
-
-    // Repository 级后台作用域：saveAsync 等持久化操作不依赖 UI 生命周期，
-    // 防止用户在 SettingsScreen 拖动滑块时直接返回导致 rememberCoroutineScope 被取消而丢失写入。
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val statsRepository = ReadingStatsRepository.getInstance(context)
 
-    /**
-     * 阅读设置异步流，首次读取时自动执行版本迁移。
-     *
-     * 迁移逻辑：确保 rtl 与手势预设始终一致。
-     * 以 rtl 为权威来源，手势配置从 rtl 推导：
-     * rtl=true → 日漫手势，rtl=false → 国漫手势（简洁模式保留）。
-     * 修复旧版中"正常模式向右翻页页数减少"的问题（rtl=false 但手势仍是日漫的 tapRight=PREV_PAGE）。
-     */
+    // ==================== 阅读设置（核心保留） ====================
+
     val readerSettings: Flow<ReaderSettings> = context.userDataStore.data
         .transform { prefs ->
             val settings = parseReaderSettings(prefs)
             emit(settings)
-            // 一次性迁移到最新版本
             if ((prefs[KEY_READER_SETTINGS_VERSION] ?: 0) < READER_SETTINGS_VERSION) {
-                // 以 rtl 为权威：rtl 决定手势方向，而非反过来
                 val (correctedRtl, correctedGesture) = when {
                     settings.rtl -> true to GestureConfig.PRESET_MANGA
                     settings.gestureConfig.presetKey() == "simple" -> false to GestureConfig.PRESET_SIMPLE
@@ -190,13 +158,6 @@ class SettingsRepository(private val context: Context) {
         }
         .flowOn(Dispatchers.IO)
 
-    /**
-     * 迁移旧版手势配置。
-     *
-     * 旧版 PRESET_MANGA 的 swipeLeft/swipeRight 与 PRESET_COMIC 完全相同
-     * （swipeLeft=NEXT, swipeRight=PREV），导致切换预设只改点击方向不改滑动方向。
-     * 检测旧版特征并替换为修复后的新版。
-     */
     private fun migrateGestureConfig(config: GestureConfig): GestureConfig {
         val isOldMangaPreset = config.presetName == "日漫模式" &&
                 config.tapLeft == GestureConfig.GestureAction.NEXT_PAGE &&
@@ -240,7 +201,6 @@ class SettingsRepository(private val context: Context) {
             eyeCare = prefs[KEY_EYE_CARE] ?: false,
             volumeKeyNav = prefs[KEY_VOLUME_KEY_NAV] ?: false,
             pageAnimation = runCatching {
-                // 若旧版本保存了已移除的 CURL，则回退到无动画
                 val name = prefs[KEY_PAGE_ANIMATION] ?: "NONE"
                 if (name == "CURL") PageAnimation.NONE else PageAnimation.valueOf(name)
             }.getOrDefault(PageAnimation.NONE),
@@ -289,10 +249,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 将阅读相关设置恢复为默认，但保留外观主题、自定义主题色与自动主题模式，
-     * 避免用户因误操作丢失全局配色。
-     */
     suspend fun resetReaderSettings() {
         context.userDataStore.edit { prefs ->
             val current = parseReaderSettings(prefs)
@@ -305,9 +261,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 将图像相关滤镜与处理参数恢复为默认，保留缩放模式、裁边开关以外的图像效果。
-     */
     suspend fun resetImageSettings() {
         context.userDataStore.edit { prefs ->
             val current = parseReaderSettings(prefs)
@@ -338,10 +291,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 根据当前阅读方向恢复为默认手势预设：
-     * RTL（日漫）使用 PRESET_MANGA，非 RTL 使用 PRESET_COMIC。
-     */
     suspend fun resetGestureSettings() {
         context.userDataStore.edit { prefs ->
             val current = parseReaderSettings(prefs)
@@ -351,10 +300,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 将阅读设置写入已有的 [MutablePreferences]，供 [saveReaderSettings] 与批量导入复用，
-     * 避免在 dataStore.edit 块内再次调用 edit 导致嵌套事务。
-     */
     private fun saveReaderSettingsToPreferences(prefs: MutablePreferences, settings: ReaderSettings) {
         prefs[KEY_DUAL_PAGE] = settings.dualPage
         prefs[KEY_AUTO_DUAL_PAGE_LANDSCAPE] = settings.autoDualPageInLandscape
@@ -413,15 +358,6 @@ class SettingsRepository(private val context: Context) {
         prefs[KEY_READER_SETTINGS_VERSION] = READER_SETTINGS_VERSION
     }
 
-    /**
-     * 异步保存完整阅读设置，合并 300ms 内的连续写入，避免滑块快速拖动时产生大量 DataStore 写入。
-     *
-     * 调用方必须传入完整的 [ReaderSettings]，Repository 在 dataStore.edit 原子块内写入，
-     * 避免外部读取快照与 delay 期间其他写入交错导致的数据覆盖。连续调用时旧任务会被取消，
-     * 最终只保留最新一次完整设置，保证所有字段一致性。
-     *
-     * 使用 Repository 级作用域而非 UI scope，确保用户退出设置页后延迟写入仍能完成。
-     */
     fun saveAsync(settings: ReaderSettings) {
         repositoryScope.launch {
             saveJobLock.withLock {
@@ -430,12 +366,10 @@ class SettingsRepository(private val context: Context) {
                     try {
                         delay(300)
                         context.userDataStore.edit { prefs ->
-                            // 若延迟期间已被取消，避免写入过期快照。
                             if (!currentCoroutineContext().isActive) return@edit
                             saveReaderSettingsToPreferences(prefs, settings)
                         }
                     } catch (e: CancellationException) {
-                        // 新写入取消旧任务是正常行为，无需处理
                         throw e
                     } catch (e: Exception) {
                         Log.e("SettingsRepository", "保存阅读设置失败", e)
@@ -445,13 +379,7 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 立即持久化指定的阅读设置，并等待任何待执行的异步保存完成。
-     * 适用于需要确保设置立即落盘的场景（如退出设置页前的兜底保存）。
-     */
     suspend fun flushSave(settings: ReaderSettings) {
-        // 使用 Mutex 保证 cancel-join-write 全程互斥，避免 saveAsync 在 join 与 edit 之间
-        // 插入新的延迟写入任务，导致 flushSave 写入后被过期快照覆盖。
         saveJobLock.withLock {
             val current = saveJob
             saveJob?.cancel()
@@ -463,445 +391,7 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    fun getProgress(uri: Uri): Flow<Int> = getProgress(uri, null)
-
-    fun getProgress(uri: Uri, chapterTitle: String?): Flow<Int> = context.userDataStore.data.map { prefs ->
-        prefs[intPreferencesKey(progressKey(uri, chapterTitle))]
-            ?: prefs[intPreferencesKey(legacyProgressKey(uri, chapterTitle))]
-            ?: 0
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveProgress(uri: Uri, page: Int) = saveProgress(uri, null, page)
-
-    suspend fun saveProgress(uri: Uri, chapterTitle: String?, page: Int) {
-        context.userDataStore.edit { prefs ->
-            val key = intPreferencesKey(progressKey(uri, chapterTitle))
-            prefs[key] = page
-            // 写入新键后尝试清理旧键，逐步迁移到安全分隔符。
-            val legacyKey = intPreferencesKey(legacyProgressKey(uri, chapterTitle))
-            if (prefs.contains(legacyKey)) {
-                prefs.remove(legacyKey)
-            }
-            val timeKey = longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri.toString())
-            prefs[timeKey] = System.currentTimeMillis()
-            // 跟踪已记录进度的 URI，用于 getAllProgress 查询。
-            // 仅在 URI 未在列表中时才更新，避免同一漫画翻页时频繁序列化写入。
-            val currentUri = uri.toString()
-            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
-            if (!tracked.contains(currentUri)) {
-                val updated = (listOf(currentUri) + tracked).take(MAX_TRACKED_URIS)
-                prefs[KEY_TRACKED_URIS] = json.encodeToString(ListSerializer(String.serializer()), updated)
-            }
-        }
-    }
-
-    /**
-     * 生成进度存储键。
-     * 使用 `#` 作为章节分隔符；旧版使用 `\u0000` 会导致部分存储后端异常，
-     * 读写时同时兼容旧键，避免用户分卷进度丢失。
-     */
-    private fun progressKey(uri: Uri, chapterTitle: String?): String {
-        return KEY_PROGRESS_PREFIX + uri.toString() + if (!chapterTitle.isNullOrBlank()) "#$chapterTitle" else ""
-    }
-
-    private fun legacyProgressKey(uri: Uri, chapterTitle: String?): String {
-        return KEY_PROGRESS_PREFIX + uri.toString() + if (!chapterTitle.isNullOrBlank()) "\u0000$chapterTitle" else ""
-    }
-
-    fun getTotalPages(uri: Uri): Flow<Int> = context.userDataStore.data.map { prefs ->
-        prefs[intPreferencesKey(KEY_TOTAL_PREFIX + uri.toString())] ?: 0
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveTotalPages(uri: Uri, total: Int) {
-        context.userDataStore.edit { prefs ->
-            prefs[intPreferencesKey(KEY_TOTAL_PREFIX + uri.toString())] = total
-        }
-    }
-
-    /**
-     * 阅读器翻页时批量写入进度：章节进度、漫画整体进度、总页数、阅读时间、追踪 URI
-     * 合并为一次 DataStore 事务，避免快速翻页时多次 edit 带来的 IO 与锁竞争。
-     */
-    suspend fun saveReadingProgress(
-        uri: Uri,
-        chapterTitle: String?,
-        chapterPage: Int,
-        overallPage: Int,
-        totalPages: Int
-    ) {
-        context.userDataStore.edit { prefs ->
-            val chapterKey = intPreferencesKey(progressKey(uri, chapterTitle))
-            prefs[chapterKey] = chapterPage
-            val legacyKey = intPreferencesKey(legacyProgressKey(uri, chapterTitle))
-            if (prefs.contains(legacyKey)) {
-                prefs.remove(legacyKey)
-            }
-            val timeKey = longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri.toString())
-            prefs[timeKey] = System.currentTimeMillis()
-            val currentUri = uri.toString()
-            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
-            if (!tracked.contains(currentUri)) {
-                val updated = (listOf(currentUri) + tracked).take(MAX_TRACKED_URIS)
-                prefs[KEY_TRACKED_URIS] = json.encodeToString(ListSerializer(String.serializer()), updated)
-            }
-            prefs[intPreferencesKey(KEY_PROGRESS_PREFIX + currentUri)] = overallPage
-            prefs[intPreferencesKey(KEY_TOTAL_PREFIX + currentUri)] = totalPages
-        }
-    }
-
-    /**
-     * 批量保存阅读进度与总页数：每个 URI 的整体进度、总页数、更新时间、追踪列表
-     * 合并为一次 DataStore 事务，用于 WebDAV 等同步场景，避免 N 次 edit 带来的 IO 开销。
-     *
-     * @param progressMap uri -> overallPage
-     * @param totalMap uri -> totalPages
-     */
-    suspend fun saveProgressBatch(
-        progressMap: Map<String, Int>,
-        totalMap: Map<String, Int>
-    ) {
-        if (progressMap.isEmpty() && totalMap.isEmpty()) return
-        context.userDataStore.edit { prefs ->
-            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS]).toMutableSet()
-            var changed = false
-            val now = System.currentTimeMillis()
-            for ((uri, page) in progressMap) {
-                prefs[intPreferencesKey(KEY_PROGRESS_PREFIX + uri)] = page
-                prefs[longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri)] = now
-                if (tracked.add(uri)) changed = true
-            }
-            for ((uri, total) in totalMap) {
-                prefs[intPreferencesKey(KEY_TOTAL_PREFIX + uri)] = total
-                if (tracked.add(uri)) changed = true
-            }
-            if (changed) {
-                prefs[KEY_TRACKED_URIS] = json.encodeToString(
-                    ListSerializer(String.serializer()),
-                    (tracked.toList().take(MAX_TRACKED_URIS))
-                )
-            }
-        }
-    }
-
-    /**
-     * 批量保存阅读时间戳，用于 WebDAV 等同步场景。
-     * 将远程合并后的时间戳写入 DataStore，保证后续冲突解决依据一致。
-     */
-    suspend fun saveProgressTimesBatch(times: Map<String, Long>) {
-        if (times.isEmpty()) return
-        context.userDataStore.edit { prefs ->
-            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS]).toMutableSet()
-            var changed = false
-            for ((uri, time) in times) {
-                prefs[longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri)] = time
-                if (tracked.add(uri)) changed = true
-            }
-            if (changed) {
-                prefs[KEY_TRACKED_URIS] = json.encodeToString(
-                    ListSerializer(String.serializer()),
-                    tracked.toList().take(MAX_TRACKED_URIS)
-                )
-            }
-        }
-    }
-
-    /**
-     * 返回所有已记录阅读进度的漫画：uri -> (progress, total)。
-     * 用于书架计算阅读状态（未读/阅读中/已读）。
-     */
-    fun getAllProgress(): Flow<Map<String, Pair<Int, Int>>> = context.userDataStore.data.map { prefs ->
-        val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
-        if (tracked.isEmpty()) return@map emptyMap()
-        // 一次性获取所有键值，避免多次索引查找
-        val all = prefs.asMap()
-        val result = HashMap<String, Pair<Int, Int>>(tracked.size)
-        for (uriStr in tracked) {
-            val baseProgress = all[intPreferencesKey(KEY_PROGRESS_PREFIX + uriStr)] as? Int
-            val total = (all[intPreferencesKey(KEY_TOTAL_PREFIX + uriStr)] as? Int) ?: 0
-            val progress = baseProgress ?: run {
-                // 若整体进度不存在，查找该漫画下的分卷进度，取最大值作为整体进度。
-                // 同时兼容旧版 `\u0000` 分隔符与新 `#` 分隔符。
-                val prefix = KEY_PROGRESS_PREFIX + uriStr
-                all.entries.filter {
-                    val name = it.key.name
-                    name.startsWith(prefix) && name.length > prefix.length &&
-                        name[prefix.length] in setOf('\u0000', '#')
-                }.mapNotNull { it.value as? Int }.maxOrNull() ?: 0
-            }
-            result[uriStr] = Pair(progress, total)
-        }
-        result
-    }.flowOn(Dispatchers.IO)
-
-    /**
-     * 返回所有已记录阅读进度的漫画及其最后阅读时间：uri -> timestamp。
-     * 用于书架「最近阅读」排序。
-     */
-    fun getRecentReads(): Flow<Map<String, Long>> = context.userDataStore.data.map { prefs ->
-        val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
-        if (tracked.isEmpty()) return@map emptyMap()
-        val all = prefs.asMap()
-        val result = HashMap<String, Long>(tracked.size)
-        for (uriStr in tracked) {
-            val time = all[longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uriStr)] as? Long ?: 0L
-            if (time > 0L) {
-                result[uriStr] = time
-            }
-        }
-        result
-    }.flowOn(Dispatchers.IO)
-
-    /** 标记为已读：进度设为最后一页 */
-    suspend fun markAsRead(uri: Uri, totalPages: Int) {
-        saveProgress(uri, (totalPages - 1).coerceAtLeast(0))
-    }
-
-    /** 标记为未读：进度归零 */
-    suspend fun markAsUnread(uri: Uri) {
-        saveProgress(uri, 0)
-    }
-
-    fun getBookshelfRoot(): Flow<String?> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_ROOT]
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveBookshelfRoot(uriString: String) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_ROOT] = uriString
-        }
-    }
-
-    // ---------- 多书架支持 ----------
-
-    fun getBookshelfUris(): Flow<List<String>> = context.userDataStore.data.map { prefs ->
-        parseBookshelfUris(prefs[KEY_BOOKSHELF_URIS])
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveBookshelfUris(uris: List<String>) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_URIS] = uris.joinToString("|")
-        }
-    }
-
-    suspend fun addBookshelfUri(uriString: String) {
-        context.userDataStore.edit { prefs ->
-            val list = parseBookshelfUris(prefs[KEY_BOOKSHELF_URIS]).toMutableList()
-            if (!list.contains(uriString)) list.add(uriString)
-            prefs[KEY_BOOKSHELF_URIS] = list.joinToString("|")
-        }
-    }
-
-    suspend fun removeBookshelfUri(uriString: String) {
-        context.userDataStore.edit { prefs ->
-            val list = parseBookshelfUris(prefs[KEY_BOOKSHELF_URIS]).filter { it != uriString }
-            prefs[KEY_BOOKSHELF_URIS] = list.joinToString("|")
-        }
-    }
-
-    fun getCurrentBookshelfIndex(): Flow<Int> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_CURRENT_BOOKSHELF_INDEX] ?: 0
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveCurrentBookshelfIndex(index: Int) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_CURRENT_BOOKSHELF_INDEX] = index
-        }
-    }
-
-    private fun parseBookshelfUris(raw: String?): List<String> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return raw.split("|").filter { it.isNotEmpty() }
-    }
-
-    fun getBookmarks(): Flow<Map<String, List<Int>>> = context.userDataStore.data.map { prefs ->
-        decodeBookmarks(prefs[KEY_BOOKMARKS])
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun addBookmark(uri: Uri, page: Int) {
-        context.userDataStore.edit { prefs ->
-            val map = decodeBookmarks(prefs[KEY_BOOKMARKS]).toMutableMap()
-
-            val key = uri.toString()
-            val list = (map[key] ?: emptyList()).toMutableSet().apply { add(page) }.toSortedSet()
-            map[key] = list.toList()
-
-            prefs[KEY_BOOKMARKS] = encodeBookmarks(map)
-        }
-    }
-
-    suspend fun removeBookmark(uri: Uri, page: Int) {
-        context.userDataStore.edit { prefs ->
-            val map = decodeBookmarks(prefs[KEY_BOOKMARKS]).toMutableMap()
-
-            val key = uri.toString()
-            val list = (map[key] ?: return@edit).toMutableList().apply { remove(page) }
-            if (list.isEmpty()) {
-                map.remove(key)
-            } else {
-                map[key] = list.sorted()
-            }
-
-            prefs[KEY_BOOKMARKS] = encodeBookmarks(map)
-        }
-    }
-
-    /**
-     * 直接覆盖指定漫画的书签列表。用于退出阅读器时把内存中的书签状态完整同步到磁盘，
-     * 避免最后一刻的增删协程被取消而丢失。
-     */
-    suspend fun saveBookmarks(uri: Uri, pages: List<Int>) {
-        context.userDataStore.edit { prefs ->
-            val map = decodeBookmarks(prefs[KEY_BOOKMARKS]).toMutableMap()
-            val key = uri.toString()
-            if (pages.isEmpty()) {
-                map.remove(key)
-            } else {
-                map[key] = pages.distinct().sorted()
-            }
-            prefs[KEY_BOOKMARKS] = encodeBookmarks(map)
-        }
-    }
-
-    /**
-     * 批量合并书签：将 [uriToPages] 中的页码合并到现有书签中。
-     * 用于 WebDAV 等同步场景，避免单条写入触发大量 DataStore 事务。
-     */
-    suspend fun mergeBookmarks(uriToPages: Map<String, List<Int>>) {
-        if (uriToPages.isEmpty()) return
-        context.userDataStore.edit { prefs ->
-            val map = decodeBookmarks(prefs[KEY_BOOKMARKS]).toMutableMap()
-            for ((uri, pages) in uriToPages) {
-                val existing = map[uri] ?: emptyList()
-                map[uri] = (existing + pages).distinct().sorted()
-            }
-            prefs[KEY_BOOKMARKS] = encodeBookmarks(map)
-        }
-    }
-
-    private fun decodeTrackedUris(raw: String?): List<String> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString(ListSerializer(String.serializer()), raw) }
-            .getOrElse { raw.split("|").filter(String::isNotEmpty) }
-    }
-
-    private fun decodeBookmarks(raw: String?): Map<String, List<Int>> {
-        if (raw.isNullOrBlank()) return emptyMap()
-        val serializer = MapSerializer(String.serializer(), ListSerializer(Int.serializer()))
-        return runCatching { json.decodeFromString(serializer, raw) }.getOrElse {
-            raw.split(";").mapNotNull { entry ->
-                val separator = entry.lastIndexOf(':')
-                if (separator <= 0) return@mapNotNull null
-                val pages = entry.substring(separator + 1).split(',').mapNotNull(String::toIntOrNull)
-                entry.substring(0, separator).takeIf { pages.isNotEmpty() }?.let { it to pages }
-            }.toMap()
-        }
-    }
-
-    private fun encodeBookmarks(value: Map<String, List<Int>>): String = json.encodeToString(
-        MapSerializer(String.serializer(), ListSerializer(Int.serializer())), value
-    )
-
-    fun getFavorites(): Flow<Set<String>> = context.userDataStore.data.map { prefs ->
-        parseStringSet(prefs[KEY_FAVORITES])
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun toggleFavorite(uri: Uri) {
-        context.userDataStore.edit { prefs ->
-            val set = parseStringSet(prefs[KEY_FAVORITES]).toMutableSet()
-            val key = uri.toString()
-            if (set.contains(key)) set.remove(key) else set.add(key)
-            prefs[KEY_FAVORITES] = serializeStringSet(set)
-        }
-    }
-
-    /**
-     * 批量添加收藏，仅把 [uris] 中尚未收藏的 URI 加入收藏集。
-     * 用于 WebDAV 等同步场景，避免单条写入触发大量 DataStore 事务。
-     */
-    suspend fun addFavorites(uris: Set<String>) {
-        if (uris.isEmpty()) return
-        context.userDataStore.edit { prefs ->
-            val set = parseStringSet(prefs[KEY_FAVORITES]).toMutableSet()
-            var changed = false
-            for (uri in uris) {
-                if (set.add(uri)) changed = true
-            }
-            if (changed) {
-                prefs[KEY_FAVORITES] = serializeStringSet(set)
-            }
-        }
-    }
-
-    // ---------- 分类管理 ----------
-
-    /**
-     * 获取所有分类名称列表。
-     * 兼容旧版 "分类1|分类2" 格式与新版 JSON 格式。
-     */
-    fun getCategories(): Flow<List<String>> = context.userDataStore.data.map { prefs ->
-        parseStringList(prefs[KEY_CATEGORIES])
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun addCategory(name: String) {
-        context.userDataStore.edit { prefs ->
-            val list = parseStringList(prefs[KEY_CATEGORIES]).toMutableList()
-            if (!list.contains(name)) list.add(name)
-            prefs[KEY_CATEGORIES] = serializeStringList(list)
-        }
-    }
-
-    suspend fun removeCategory(name: String) {
-        context.userDataStore.edit { prefs ->
-            val list = parseStringList(prefs[KEY_CATEGORIES]).filter { it != name }
-            prefs[KEY_CATEGORIES] = serializeStringList(list)
-            // 同时清除该分类下的所有漫画关联
-            val catRaw = prefs[KEY_COMIC_CATEGORIES] ?: ""
-            val map = parseComicCategoryMap(catRaw)
-            map.values.forEach { it.remove(name) }
-            prefs[KEY_COMIC_CATEGORIES] = serializeComicCategoryMap(map)
-        }
-    }
-
-    /**
-     * 获取漫画所属分类集合：uri -> Set<分类名>
-     */
-    fun getComicCategories(): Flow<Map<String, Set<String>>> = context.userDataStore.data.map { prefs ->
-        val raw = prefs[KEY_COMIC_CATEGORIES] ?: return@map emptyMap()
-        parseComicCategoryMap(raw)
-    }.flowOn(Dispatchers.IO)
-
-    /**
-     * 将漫画加入/移出某分类
-     */
-    suspend fun toggleComicCategory(uri: Uri, category: String) {
-        context.userDataStore.edit { prefs ->
-            val raw = prefs[KEY_COMIC_CATEGORIES] ?: ""
-            val map = parseComicCategoryMap(raw)
-            val key = uri.toString()
-            val cats = map.getOrPut(key) { mutableSetOf() }
-            if (cats.contains(category)) cats.remove(category) else cats.add(category)
-            prefs[KEY_COMIC_CATEGORIES] = serializeComicCategoryMap(map)
-        }
-    }
-
-    private fun parseComicCategoryMap(raw: String): MutableMap<String, MutableSet<String>> {
-        val result = mutableMapOf<String, MutableSet<String>>()
-        raw.split(";").forEach { entry ->
-            val parts = entry.split("::")
-            if (parts.size == 2) {
-                val uri = parts[0]
-                val cats = parts[1].split(",").filter { it.isNotEmpty() }.toMutableSet()
-                result[uri] = cats
-            }
-        }
-        return result
-    }
-
-    private fun serializeComicCategoryMap(map: Map<String, Set<String>>): String {
-        return map.entries
-            .filter { it.value.isNotEmpty() }
-            .joinToString(";") { (uri, cats) -> "$uri::${cats.joinToString(",")}" }
-    }
+    // ==================== 权限 / 帮助提示 ====================
 
     fun getPermissionAcknowledged(): Flow<Boolean> = context.userDataStore.data.map { prefs ->
         prefs[KEY_PERMISSION_ACK] ?: false
@@ -927,62 +417,7 @@ class SettingsRepository(private val context: Context) {
         context.userDataStore.edit { it[KEY_READER_EXIT_CONFIRM_DISABLED] = value }
     }
 
-    // ---------- 漫画评分、短评、标签 ----------
-
-    fun getComicExtras(uri: Uri): Flow<ComicExtras> = context.userDataStore.data.map { prefs ->
-        parseComicExtras(prefs[stringPreferencesKey(KEY_COMIC_EXTRAS_PREFIX + uri.toString())])
-    }.flowOn(Dispatchers.IO)
-
-    fun getAllComicExtras(): Flow<Map<String, ComicExtras>> = context.userDataStore.data.map { prefs ->
-        prefs.asMap().mapNotNull { (key, value) ->
-            val keyName = key.name
-            if (keyName.startsWith(KEY_COMIC_EXTRAS_PREFIX) && value is String) {
-                val uriString = keyName.removePrefix(KEY_COMIC_EXTRAS_PREFIX)
-                uriString to parseComicExtras(value)
-            } else null
-        }.toMap()
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveComicExtras(uri: Uri, extras: ComicExtras) {
-        context.userDataStore.edit { prefs ->
-            prefs[stringPreferencesKey(KEY_COMIC_EXTRAS_PREFIX + uri.toString())] = json.encodeToString(extras)
-        }
-    }
-
-    private fun parseComicExtras(raw: String?): ComicExtras {
-        if (raw.isNullOrBlank()) return ComicExtras()
-        return runCatching { json.decodeFromString<ComicExtras>(raw) }.getOrDefault(ComicExtras())
-    }
-
-    // ---------- 书单 ----------
-
-    fun getReadingLists(): Flow<List<ReadingList>> = context.userDataStore.data.map { prefs ->
-        parseReadingLists(prefs[KEY_READING_LISTS])
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun saveReadingLists(lists: List<ReadingList>) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_READING_LISTS] = json.encodeToString(lists)
-        }
-    }
-
-    suspend fun addComicToList(listId: String, comic: ComicEntry) {
-        val lists = getReadingLists().first().toMutableList()
-        val index = lists.indexOfFirst { it.id == listId }
-        if (index < 0) return
-        val list = lists[index]
-        val item = ReadingListItem(uriString = comic.uri.toString(), title = comic.title)
-        if (list.items.any { it.uriString == item.uriString }) return
-        lists[index] = list.copy(items = list.items + item)
-        saveReadingLists(lists)
-    }
-
-    private fun parseReadingLists(raw: String?): List<ReadingList> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<ReadingList>>(raw) }.getOrDefault(emptyList())
-    }
-
-    // ---------- 阅读统计（委托给 ReadingStatsRepository） ----------
+    // ==================== 阅读统计（委托） ====================
 
     fun getReadingStats(): Flow<ReadingStats> = statsRepository.getReadingStats()
 
@@ -1012,215 +447,154 @@ class SettingsRepository(private val context: Context) {
         minutesAchieved: Boolean
     ) = statsRepository.recordGoalAchievement(date, pagesAchieved, minutesAchieved)
 
-    // ---------- 阅读历史 ----------
+    // ==================== 委托：BookmarkRepository ====================
 
-    /**
-     * 返回阅读历史列表，按最后访问时间倒序排列。
-     */
-    fun getReadingHistory(): Flow<List<ReadingHistoryEntry>> = context.userDataStore.data.map { prefs ->
-        parseReadingHistory(prefs[KEY_READING_HISTORY])
-    }.flowOn(Dispatchers.IO)
+    fun getBookmarks(): Flow<Map<String, List<Int>>> = bookmarkRepository.getBookmarks()
 
-    /**
-     * 记录一条阅读历史（打开漫画时调用）。
-     * 若 uri 已存在，更新时间和页码；否则插入新的记录到队首。
-     */
-    suspend fun addReadingHistory(entry: ReadingHistoryEntry) {
-        context.userDataStore.edit { prefs ->
-            val list = parseReadingHistory(prefs[KEY_READING_HISTORY]).toMutableList()
-            list.removeAll { it.uriString == entry.uriString }
-            list.add(0, entry)
-            // 超出容量时裁剪末尾（最旧的记录）
-            while (list.size > MAX_HISTORY_SIZE) list.removeAt(list.size - 1)
-            prefs[KEY_READING_HISTORY] = json.encodeToString(list)
-        }
-    }
+    suspend fun addBookmark(uri: Uri, page: Int) = bookmarkRepository.addBookmark(uri, page)
 
-    /**
-     * 删除指定 uri 的阅读历史；若 uriString 为 null 则清空全部。
-     */
-    suspend fun clearReadingHistory(uriString: String? = null) {
-        context.userDataStore.edit { prefs ->
-            if (uriString == null) {
-                prefs.remove(KEY_READING_HISTORY)
-            } else {
-                val list = parseReadingHistory(prefs[KEY_READING_HISTORY]).toMutableList()
-                list.removeAll { it.uriString == uriString }
-                prefs[KEY_READING_HISTORY] = json.encodeToString(list)
-            }
-        }
-    }
+    suspend fun removeBookmark(uri: Uri, page: Int) = bookmarkRepository.removeBookmark(uri, page)
 
-    private fun parseReadingHistory(raw: String?): List<ReadingHistoryEntry> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<ReadingHistoryEntry>>(raw) }.getOrDefault(emptyList())
-    }
+    suspend fun saveBookmarks(uri: Uri, pages: List<Int>) = bookmarkRepository.saveBookmarks(uri, pages)
 
-    // ---------- 书架视图模式 ----------
+    suspend fun mergeBookmarks(uriToPages: Map<String, List<Int>>) = bookmarkRepository.mergeBookmarks(uriToPages)
 
-    /**
-     * 返回书架视图模式，默认网格视图。
-     */
-    fun getBookshelfViewMode(): Flow<String> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_VIEW_MODE] ?: "GRID"
-    }.flowOn(Dispatchers.IO)
+    fun getFavorites(): Flow<Set<String>> = bookmarkRepository.getFavorites()
 
-    /**
-     * 保存书架视图模式。
-     */
-    suspend fun saveBookshelfViewMode(mode: String) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_VIEW_MODE] = mode
-        }
-    }
+    suspend fun toggleFavorite(uri: Uri) = bookmarkRepository.toggleFavorite(uri)
 
-    // ---------- 书架筛选 / 排序 / 当前分类 ----------
+    suspend fun addFavorites(uris: Set<String>) = bookmarkRepository.addFavorites(uris)
 
-    /**
-     * 返回书架筛选条件，默认全部。
-     */
-    fun getBookshelfFilter(): Flow<String> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_FILTER] ?: "ALL"
-    }.flowOn(Dispatchers.IO)
+    fun getCategories(): Flow<List<String>> = bookmarkRepository.getCategories()
 
-    suspend fun saveBookshelfFilter(filter: String) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_FILTER] = filter
-        }
-    }
+    suspend fun addCategory(name: String) = bookmarkRepository.addCategory(name)
 
-    /**
-     * 返回书架排序方式，默认按名称。
-     */
-    fun getBookshelfSort(): Flow<String> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_SORT] ?: "NAME"
-    }.flowOn(Dispatchers.IO)
+    suspend fun removeCategory(name: String) = bookmarkRepository.removeCategory(name)
 
-    suspend fun saveBookshelfSort(sort: String) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_SORT] = sort
-        }
-    }
+    fun getComicCategories(): Flow<Map<String, Set<String>>> = bookmarkRepository.getComicCategories()
 
-    /**
-     * 返回书架当前选中的分类，null 表示未选择分类。
-     */
-    fun getBookshelfSelectedCategory(): Flow<String?> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_SELECTED_CATEGORY]
-    }.flowOn(Dispatchers.IO)
+    suspend fun toggleComicCategory(uri: Uri, category: String) = bookmarkRepository.toggleComicCategory(uri, category)
 
-    suspend fun saveBookshelfSelectedCategory(category: String?) {
-        context.userDataStore.edit { prefs ->
-            if (category != null) {
-                prefs[KEY_BOOKSHELF_SELECTED_CATEGORY] = category
-            } else {
-                prefs.remove(KEY_BOOKSHELF_SELECTED_CATEGORY)
-            }
-        }
-    }
+    // ==================== 委托：BookshelfRepository ====================
 
-    /**
-     * 返回书架搜索关键词。
-     */
-    fun getBookshelfSearchQuery(): Flow<String> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_SEARCH_QUERY] ?: ""
-    }.flowOn(Dispatchers.IO)
+    fun getBookshelfRoot(): Flow<String?> = bookshelfRepository.getBookshelfRoot()
 
-    suspend fun saveBookshelfSearchQuery(query: String) {
-        context.userDataStore.edit { prefs ->
-            if (query.isBlank()) {
-                prefs.remove(KEY_BOOKSHELF_SEARCH_QUERY)
-            } else {
-                prefs[KEY_BOOKSHELF_SEARCH_QUERY] = query
-            }
-        }
-    }
+    suspend fun saveBookshelfRoot(uriString: String) = bookshelfRepository.saveBookshelfRoot(uriString)
 
-    /**
-     * 返回书架搜索框是否展开。
-     */
-    fun isBookshelfSearching(): Flow<Boolean> = context.userDataStore.data.map { prefs ->
-        prefs[KEY_BOOKSHELF_SEARCHING] ?: false
-    }.flowOn(Dispatchers.IO)
+    fun getBookshelfUris(): Flow<List<String>> = bookshelfRepository.getBookshelfUris()
 
-    suspend fun saveBookshelfSearching(searching: Boolean) {
-        context.userDataStore.edit { prefs ->
-            prefs[KEY_BOOKSHELF_SEARCHING] = searching
-        }
-    }
+    suspend fun saveBookshelfUris(uris: List<String>) = bookshelfRepository.saveBookshelfUris(uris)
 
-    /**
-     * 返回书架搜索历史（最近使用的搜索关键词列表，去重，新记录在前）。
-     */
-    fun getBookshelfSearchHistory(): Flow<List<String>> = context.userDataStore.data.map { prefs ->
-        parseStringList(prefs[KEY_BOOKSHELF_SEARCH_HISTORY] ?: "")
-    }.flowOn(Dispatchers.IO)
+    suspend fun addBookshelfUri(uriString: String) = bookshelfRepository.addBookshelfUri(uriString)
 
-    /**
-     * 将 [query] 加入书架搜索历史。
-     * - 空/纯空白查询不会被记录。
-     * - 与已有记录去重，新记录排在最前。
-     * - 超过 [MAX_SEARCH_HISTORY_SIZE] 时移除最旧的记录。
-     */
-    suspend fun addBookshelfSearchHistory(query: String) {
-        val trimmed = query.trim()
-        if (trimmed.isEmpty()) return
-        context.userDataStore.edit { prefs ->
-            val current = parseStringList(prefs[KEY_BOOKSHELF_SEARCH_HISTORY] ?: "")
-            val updated = buildList {
-                add(trimmed)
-                current.filter { it != trimmed }.take(MAX_SEARCH_HISTORY_SIZE - 1).forEach { add(it) }
-            }
-            prefs[KEY_BOOKSHELF_SEARCH_HISTORY] = json.encodeToString(updated)
-        }
-    }
+    suspend fun removeBookshelfUri(uriString: String) = bookshelfRepository.removeBookshelfUri(uriString)
 
-    suspend fun clearBookshelfSearchHistory() {
-        context.userDataStore.edit { prefs ->
-            prefs.remove(KEY_BOOKSHELF_SEARCH_HISTORY)
-        }
-    }
+    fun getCurrentBookshelfIndex(): Flow<Int> = bookshelfRepository.getCurrentBookshelfIndex()
 
-    // ---------- 书架扫描状态（新文件检测） ----------
+    suspend fun saveCurrentBookshelfIndex(index: Int) = bookshelfRepository.saveCurrentBookshelfIndex(index)
 
-    fun getBookshelfScanState(rootUriString: String): Flow<BookshelfScanState> = context.userDataStore.data.map { prefs ->
-        val key = stringPreferencesKey(KEY_BOOKSHELF_SCAN_PREFIX + rootUriString)
-        parseBookshelfScanState(prefs[key])
-    }.flowOn(Dispatchers.IO)
+    fun getBookshelfViewMode(): Flow<String> = bookshelfRepository.getBookshelfViewMode()
 
-    suspend fun saveBookshelfScanState(rootUriString: String, state: BookshelfScanState) {
-        context.userDataStore.edit { prefs ->
-            val key = stringPreferencesKey(KEY_BOOKSHELF_SCAN_PREFIX + rootUriString)
-            prefs[key] = json.encodeToString(state)
-        }
-    }
+    suspend fun saveBookshelfViewMode(mode: String) = bookshelfRepository.saveBookshelfViewMode(mode)
 
-    /**
-     * 将指定书架的当前文件列表标记为已读，清除 NEW 角标。
-     */
-    suspend fun markBookshelfFilesSeen(rootUriString: String, currentFiles: Set<String>) {
-        context.userDataStore.edit { prefs ->
-            val key = stringPreferencesKey(KEY_BOOKSHELF_SCAN_PREFIX + rootUriString)
-            prefs[key] = json.encodeToString(
-                BookshelfScanState(
-                    lastScanAt = System.currentTimeMillis(),
-                    knownFiles = currentFiles
-                )
-            )
-        }
-    }
+    fun getBookshelfFilter(): Flow<String> = bookshelfRepository.getBookshelfFilter()
 
-    private fun parseBookshelfScanState(raw: String?): BookshelfScanState {
-        if (raw.isNullOrBlank()) return BookshelfScanState()
-        return runCatching { json.decodeFromString<BookshelfScanState>(raw) }.getOrDefault(BookshelfScanState())
-    }
+    suspend fun saveBookshelfFilter(filter: String) = bookshelfRepository.saveBookshelfFilter(filter)
 
-    // ---------- 本地备份与恢复 ----------
+    fun getBookshelfSort(): Flow<String> = bookshelfRepository.getBookshelfSort()
 
-    /**
-     * 导出所有用户数据为 JSON 字符串。
-     * 包含：阅读进度、阅读时间戳、书签、收藏、分类、漫画分类、书单、阅读统计、历史、评分标签、阅读设置。
-     */
+    suspend fun saveBookshelfSort(sort: String) = bookshelfRepository.saveBookshelfSort(sort)
+
+    fun getBookshelfSelectedCategory(): Flow<String?> = bookshelfRepository.getBookshelfSelectedCategory()
+
+    suspend fun saveBookshelfSelectedCategory(category: String?) = bookshelfRepository.saveBookshelfSelectedCategory(category)
+
+    fun getBookshelfSearchQuery(): Flow<String> = bookshelfRepository.getBookshelfSearchQuery()
+
+    suspend fun saveBookshelfSearchQuery(query: String) = bookshelfRepository.saveBookshelfSearchQuery(query)
+
+    fun isBookshelfSearching(): Flow<Boolean> = bookshelfRepository.isBookshelfSearching()
+
+    suspend fun saveBookshelfSearching(searching: Boolean) = bookshelfRepository.saveBookshelfSearching(searching)
+
+    fun getBookshelfSearchHistory(): Flow<List<String>> = bookshelfRepository.getBookshelfSearchHistory()
+
+    suspend fun addBookshelfSearchHistory(query: String) = bookshelfRepository.addBookshelfSearchHistory(query)
+
+    suspend fun clearBookshelfSearchHistory() = bookshelfRepository.clearBookshelfSearchHistory()
+
+    fun getBookshelfScanState(rootUriString: String): Flow<BookshelfScanState> =
+        bookshelfRepository.getBookshelfScanState(rootUriString)
+
+    suspend fun saveBookshelfScanState(rootUriString: String, state: BookshelfScanState) =
+        bookshelfRepository.saveBookshelfScanState(rootUriString, state)
+
+    suspend fun markBookshelfFilesSeen(rootUriString: String, currentFiles: Set<String>) =
+        bookshelfRepository.markBookshelfFilesSeen(rootUriString, currentFiles)
+
+    // ==================== 委托：ReadingHistoryRepository ====================
+
+    fun getReadingHistory(): Flow<List<ReadingHistoryEntry>> = readingHistoryRepository.getReadingHistory()
+
+    suspend fun addReadingHistory(entry: ReadingHistoryEntry) = readingHistoryRepository.addReadingHistory(entry)
+
+    suspend fun clearReadingHistory(uriString: String? = null) = readingHistoryRepository.clearReadingHistory(uriString)
+
+    fun getRecentReads(): Flow<Map<String, Long>> = readingHistoryRepository.getRecentReads()
+
+    suspend fun markAsRead(uri: Uri, totalPages: Int) = readingHistoryRepository.markAsRead(uri, totalPages)
+
+    suspend fun markAsUnread(uri: Uri) = readingHistoryRepository.markAsUnread(uri)
+
+    // ==================== 委托：ComicExtrasRepository ====================
+
+    fun getComicExtras(uri: Uri): Flow<ComicExtras> = comicExtrasRepository.getComicExtras(uri)
+
+    fun getAllComicExtras(): Flow<Map<String, ComicExtras>> = comicExtrasRepository.getAllComicExtras()
+
+    suspend fun saveComicExtras(uri: Uri, extras: ComicExtras) = comicExtrasRepository.saveComicExtras(uri, extras)
+
+    fun getReadingLists(): Flow<List<ReadingList>> = comicExtrasRepository.getReadingLists()
+
+    suspend fun saveReadingLists(lists: List<ReadingList>) = comicExtrasRepository.saveReadingLists(lists)
+
+    suspend fun addComicToList(listId: String, comic: ComicEntry) = comicExtrasRepository.addComicToList(listId, comic)
+
+    // ==================== 委托：ReadingProgressRepository ====================
+
+    fun getProgress(uri: Uri): Flow<Int> = readingProgressRepository.getProgress(uri)
+
+    fun getProgress(uri: Uri, chapterTitle: String?): Flow<Int> = readingProgressRepository.getProgress(uri, chapterTitle)
+
+    suspend fun saveProgress(uri: Uri, page: Int) = readingProgressRepository.saveProgress(uri, page)
+
+    suspend fun saveProgress(uri: Uri, chapterTitle: String?, page: Int) =
+        readingProgressRepository.saveProgress(uri, chapterTitle, page)
+
+    fun getTotalPages(uri: Uri): Flow<Int> = readingProgressRepository.getTotalPages(uri)
+
+    suspend fun saveTotalPages(uri: Uri, total: Int) = readingProgressRepository.saveTotalPages(uri, total)
+
+    suspend fun saveReadingProgress(
+        uri: Uri,
+        chapterTitle: String?,
+        chapterPage: Int,
+        overallPage: Int,
+        totalPages: Int
+    ) = readingProgressRepository.saveReadingProgress(uri, chapterTitle, chapterPage, overallPage, totalPages)
+
+    suspend fun saveProgressBatch(
+        progressMap: Map<String, Int>,
+        totalMap: Map<String, Int>
+    ) = readingProgressRepository.saveProgressBatch(progressMap, totalMap)
+
+    suspend fun saveProgressTimesBatch(times: Map<String, Long>) =
+        readingProgressRepository.saveProgressTimesBatch(times)
+
+    fun getAllProgress(): Flow<Map<String, Pair<Int, Int>>> = readingProgressRepository.getAllProgress()
+
+    // ==================== 本地备份与恢复 ====================
+
     suspend fun exportAllData(): String = withContext(Dispatchers.IO) {
         val backup = BackupData(
             version = BACKUP_VERSION,
@@ -1239,10 +613,6 @@ class SettingsRepository(private val context: Context) {
         json.encodeToString(backup)
     }
 
-    /**
-     * 从 JSON 字符串导入用户数据。
-     * @param overwrite 为 true 时覆盖本地数据；为 false 时与本地合并（进度取最大值，集合取并集）。
-     */
     suspend fun importAllData(jsonString: String, overwrite: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         try {
             val backup = runCatching { json.decodeFromString<BackupData>(jsonString) }.getOrNull()
@@ -1254,11 +624,9 @@ class SettingsRepository(private val context: Context) {
             if (backup.version > BACKUP_VERSION) {
                 Log.w("SettingsRepository", "备份版本 ${backup.version} 高于当前支持版本 ${BACKUP_VERSION}，可能无法完全兼容")
             }
-            // 版本迁移钩子：未来若 BackupData 字段变更，可在此按版本逐步转换
             val migratedBackup = migrateBackupIfNeeded(backup)
             val existingExtras = if (overwrite) emptyMap() else getAllComicExtras().first()
             context.userDataStore.edit { prefs ->
-                // 阅读进度：取最大值
                 val existingProgress = if (overwrite) emptyMap() else parseAllProgress(prefs)
                 val mergedProgress = (existingProgress.keys + migratedBackup.progress.keys).associateWith { key ->
                     val existing = existingProgress[key] ?: (0 to 0)
@@ -1267,49 +635,40 @@ class SettingsRepository(private val context: Context) {
                 }
                 saveAllProgressInternal(prefs, mergedProgress)
 
-                // 阅读时间戳：合并，保留较新的时间
                 val existingProgressTimes = if (overwrite) emptyMap() else parseProgressTimes(prefs)
                 val mergedProgressTimes = (existingProgressTimes.keys + migratedBackup.progressTimes.keys).associateWith { key ->
                     maxOf(existingProgressTimes[key] ?: 0L, migratedBackup.progressTimes[key] ?: 0L)
                 }
                 saveProgressTimesInternal(prefs, mergedProgressTimes)
 
-                // 书签：合并并去重排序
-                val existingBookmarks = if (overwrite) emptyMap() else parseBookmarksMap(prefs[KEY_BOOKMARKS])
+                val existingBookmarks = if (overwrite) emptyMap() else parseBookmarksMap(prefs[stringPreferencesKey("bookmarks_map")])
                 val mergedBookmarks = (existingBookmarks.keys + migratedBackup.bookmarks.keys).associateWith { key ->
                     ((existingBookmarks[key] ?: emptyList()) + (migratedBackup.bookmarks[key] ?: emptyList())).distinct().sorted()
                 }
-                prefs[KEY_BOOKMARKS] = json.encodeToString(mergedBookmarks)
+                prefs[stringPreferencesKey("bookmarks_map")] = json.encodeToString(mergedBookmarks)
 
-                // 收藏：并集
-                val existingFavorites = if (overwrite) emptySet() else parseStringSet(prefs[KEY_FAVORITES])
-                prefs[KEY_FAVORITES] = json.encodeToString((existingFavorites + migratedBackup.favorites.toSet()).toList())
+                val existingFavorites = if (overwrite) emptySet() else parseStringSetInternal(prefs[stringPreferencesKey("favorites_set")])
+                prefs[stringPreferencesKey("favorites_set")] = json.encodeToString((existingFavorites + migratedBackup.favorites.toSet()).toList())
 
-                // 分类：并集保留顺序
-                val existingCategories = if (overwrite) emptyList() else parseStringList(prefs[KEY_CATEGORIES])
-                prefs[KEY_CATEGORIES] = json.encodeToString((existingCategories + migratedBackup.categories).distinct())
+                val existingCategories = if (overwrite) emptyList() else parseStringListInternal(prefs[stringPreferencesKey("categories_list")])
+                prefs[stringPreferencesKey("categories_list")] = json.encodeToString((existingCategories + migratedBackup.categories).distinct())
 
-                // 漫画分类：合并
-                val existingComicCategories = if (overwrite) emptyMap() else parseComicCategories(prefs[KEY_COMIC_CATEGORIES])
+                val existingComicCategories = if (overwrite) emptyMap() else parseComicCategoriesInternal(prefs[stringPreferencesKey("comic_categories")])
                 val mergedComicCategories = (existingComicCategories.keys + migratedBackup.comicCategories.keys).associateWith { key ->
                     (existingComicCategories[key] ?: emptySet()) + (migratedBackup.comicCategories[key] ?: emptySet())
                 }
-                prefs[KEY_COMIC_CATEGORIES] = json.encodeToString(mergedComicCategories)
+                prefs[stringPreferencesKey("comic_categories")] = json.encodeToString(mergedComicCategories)
 
-                // 书单：按名称合并，去重保留
-                val existingLists = if (overwrite) emptyList() else parseReadingLists(prefs[KEY_READING_LISTS])
+                val existingLists = if (overwrite) emptyList() else parseReadingListsInternal(prefs[stringPreferencesKey("reading_lists")])
                 val listMap = existingLists.associateBy { it.name }.toMutableMap()
                 for (list in migratedBackup.readingLists) {
                     listMap[list.name] = list.copy(
                         items = ((listMap[list.name]?.items ?: emptyList()) + list.items).distinct()
                     )
                 }
-                prefs[KEY_READING_LISTS] = json.encodeToString(listMap.values.toList())
+                prefs[stringPreferencesKey("reading_lists")] = json.encodeToString(listMap.values.toList())
 
-                // 阅读统计：在独立事务中合并，避免嵌套 edit（见下方 statsRepository.mergeReadingStats）
-
-                // 阅读历史：合并，新的放前面
-                val existingHistory = if (overwrite) emptyList() else parseReadingHistory(prefs[KEY_READING_HISTORY])
+                val existingHistory = if (overwrite) emptyList() else parseReadingHistoryInternal(prefs[stringPreferencesKey("reading_history")])
                 val historyMap = existingHistory.associateBy { it.uriString }.toMutableMap()
                 for (entry in migratedBackup.readingHistory) {
                     val old = historyMap[entry.uriString]
@@ -1317,18 +676,16 @@ class SettingsRepository(private val context: Context) {
                         historyMap[entry.uriString] = entry
                     }
                 }
-                val mergedHistory = historyMap.values.sortedByDescending { it.lastReadAt }.take(MAX_HISTORY_SIZE)
-                prefs[KEY_READING_HISTORY] = json.encodeToString(mergedHistory)
+                val mergedHistory = historyMap.values.sortedByDescending { it.lastReadAt }.take(200)
+                prefs[stringPreferencesKey("reading_history")] = json.encodeToString(mergedHistory)
 
-                // 漫画评分标签：按 URI 覆盖或合并
                 val mergedExtras = (existingExtras.keys + migratedBackup.comicExtras.keys).associateWith { key ->
                     existingExtras[key]?.mergeWith(migratedBackup.comicExtras[key]) ?: (migratedBackup.comicExtras[key] ?: ComicExtras())
                 }
                 for ((uri, extras) in mergedExtras) {
-                    prefs[stringPreferencesKey(KEY_COMIC_EXTRAS_PREFIX + uri)] = json.encodeToString(extras)
+                    prefs[stringPreferencesKey("extras_$uri")] = json.encodeToString(extras)
                 }
 
-                // 阅读设置：仅在覆盖时写入；复用 helper 避免嵌套 edit
                 if (overwrite) {
                     saveReaderSettingsToPreferences(prefs, migratedBackup.readerSettings)
                 }
@@ -1343,14 +700,9 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 备份版本迁移钩子。当前版本与 [BACKUP_VERSION] 一致时直接返回；
-     * 未来若 BackupData 字段发生不兼容变更，可在此按版本逐步转换，避免旧备份无法恢复。
-     */
     private fun migrateBackupIfNeeded(backup: BackupData): BackupData {
         var current = backup
         if (current.version < BACKUP_VERSION) {
-            // 预留：v1 -> v2 的字段映射/默认值填充可在此实现
             current = current.copy(version = BACKUP_VERSION)
         }
         return current
@@ -1367,7 +719,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     private fun parseAllProgress(prefs: Preferences): Map<String, Pair<Int, Int>> {
-        val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
+        val tracked = decodeTrackedUrisInternal(prefs[KEY_TRACKED_URIS])
         return tracked.associateWith { uri ->
             val page = prefs[intPreferencesKey(KEY_PROGRESS_PREFIX + uri)] ?: 0
             val total = prefs[intPreferencesKey(KEY_TOTAL_PREFIX + uri)] ?: 0
@@ -1376,14 +728,14 @@ class SettingsRepository(private val context: Context) {
     }
 
     private fun parseProgressTimes(prefs: Preferences): Map<String, Long> {
-        val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS])
+        val tracked = decodeTrackedUrisInternal(prefs[KEY_TRACKED_URIS])
         return tracked.associateWith { uri ->
             prefs[longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri)] ?: 0L
         }.filter { it.value > 0L }
     }
 
     private fun saveProgressTimesInternal(prefs: MutablePreferences, times: Map<String, Long>) {
-        val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS]).toMutableSet()
+        val tracked = decodeTrackedUrisInternal(prefs[KEY_TRACKED_URIS]).toMutableSet()
         for ((uri, time) in times) {
             prefs[longPreferencesKey(KEY_PROGRESS_TIME_PREFIX + uri)] = time
             tracked += uri
@@ -1391,36 +743,44 @@ class SettingsRepository(private val context: Context) {
         prefs[KEY_TRACKED_URIS] = json.encodeToString(tracked.take(MAX_TRACKED_URIS))
     }
 
+    private fun decodeTrackedUrisInternal(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching { json.decodeFromString(ListSerializer(String.serializer()), raw) }
+            .getOrElse { raw.split("|").filter(String::isNotEmpty) }
+    }
+
     private fun parseBookmarksMap(raw: String?): Map<String, List<Int>> {
         if (raw.isNullOrBlank()) return emptyMap()
         return runCatching { json.decodeFromString<Map<String, List<Int>>>(raw) }.getOrDefault(emptyMap())
     }
 
-    private fun parseStringSet(raw: String?): Set<String> {
+    private fun parseStringSetInternal(raw: String?): Set<String> {
         if (raw.isNullOrBlank()) return emptySet()
         val decoded = runCatching { json.decodeFromString<List<String>>(raw) }.getOrNull()
         if (decoded != null) return decoded.toSet()
-        // 兼容旧版 pipe 分隔
         return raw.split("|").filter { it.isNotEmpty() }.toSet()
     }
 
-    private fun serializeStringSet(value: Set<String>): String =
-        json.encodeToString(value.toList())
-
-    private fun parseStringList(raw: String?): List<String> {
+    private fun parseStringListInternal(raw: String?): List<String> {
         if (raw.isNullOrBlank()) return emptyList()
         val decoded = runCatching { json.decodeFromString<List<String>>(raw) }.getOrNull()
         if (decoded != null) return decoded
-        // 兼容旧版 pipe 分隔
         return raw.split("|").filter { it.isNotEmpty() }
     }
 
-    private fun serializeStringList(value: List<String>): String =
-        json.encodeToString(value)
-
-    private fun parseComicCategories(raw: String?): Map<String, Set<String>> {
+    private fun parseComicCategoriesInternal(raw: String?): Map<String, Set<String>> {
         if (raw.isNullOrBlank()) return emptyMap()
         return runCatching { json.decodeFromString<Map<String, Set<String>>>(raw) }.getOrDefault(emptyMap())
+    }
+
+    private fun parseReadingListsInternal(raw: String?): List<ReadingList> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching { json.decodeFromString<List<ReadingList>>(raw) }.getOrDefault(emptyList())
+    }
+
+    private fun parseReadingHistoryInternal(raw: String?): List<ReadingHistoryEntry> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching { json.decodeFromString<List<ReadingHistoryEntry>>(raw) }.getOrDefault(emptyList())
     }
 
     @kotlinx.serialization.Serializable
@@ -1442,17 +802,17 @@ class SettingsRepository(private val context: Context) {
 
 @kotlinx.serialization.Serializable
 enum class ScrollMode {
-    PAGE,       // 单/双页模式
-    VERTICAL,   // 垂直滚动（条漫）
-    HORIZONTAL  // 水平滚动
+    PAGE,
+    VERTICAL,
+    HORIZONTAL
 }
 
 @kotlinx.serialization.Serializable
 enum class ZoomMode {
-    FREE,        // 自由缩放（默认）
-    FIT_WIDTH,   // 适合宽度
-    FIT_HEIGHT,  // 适合高度
-    FIT_SCREEN   // 适合屏幕
+    FREE,
+    FIT_WIDTH,
+    FIT_HEIGHT,
+    FIT_SCREEN
 }
 
 @Immutable
@@ -1488,8 +848,8 @@ data class ReaderSettings(
     val eyeCare: Boolean = false,
     val volumeKeyNav: Boolean = false,
     val pageAnimation: PageAnimation = PageAnimation.NONE,
-    val randomAnimation: Boolean = false,       // 每次翻页随机一种动效
-    val pageAnimSpeed: Float = 1.0f,           // 翻页动画速度倍率 (0.2f - 3.0f)
+    val randomAnimation: Boolean = false,
+    val pageAnimSpeed: Float = 1.0f,
     val enableZoom: Boolean = false,
     val sharpenStrength: Float = 1f,
     val denoiseStrength: Float = 1f,
@@ -1516,27 +876,24 @@ data class ReaderSettings(
 
 @kotlinx.serialization.Serializable
 enum class PageAnimation {
-    NONE,       // 无动画
-    SLIDE,      // 滑动
-    FADE,       // 淡入淡出
-    PIXEL,      // 像素风（盲盒动效）
-    BLINDS,     // 百叶窗
-    SHATTER,    // 玻璃碎裂
-    DOTS        // 漫画网点
+    NONE,
+    SLIDE,
+    FADE,
+    PIXEL,
+    BLINDS,
+    SHATTER,
+    DOTS
 }
 
 @kotlinx.serialization.Serializable
 enum class BackgroundTexture {
-    NONE,       // 纯色
-    KRAFT,      // 牛皮纸
-    GLASS,      // 磨砂玻璃
-    STARS,      // 星空
-    WOOD        // 木纹
+    NONE,
+    KRAFT,
+    GLASS,
+    STARS,
+    WOOD
 }
 
-/**
- * 应用级主题皮肤预设。
- */
 @kotlinx.serialization.Serializable
 enum class AppTheme(
     val displayName: String,
@@ -1564,40 +921,33 @@ fun AppTheme.displayName(context: Context): String = when (this) {
 
 @kotlinx.serialization.Serializable
 enum class TapZoneSize {
-    SMALL,      // 小点击区域（中间菜单区大）
-    MEDIUM,     // 中等
-    LARGE        // 大点击区域（翻页区大）
+    SMALL,
+    MEDIUM,
+    LARGE
 }
 
 @kotlinx.serialization.Serializable
 enum class ScaleFilter {
-    BILINEAR,   // 双线性（默认，快）
-    BICUBIC,    // 双三次（较平滑）
-    LANCZOS3    // Lanczos3（最锐利，适合低清扫描放大）
+    BILINEAR,
+    BICUBIC,
+    LANCZOS3
 }
 
 @kotlinx.serialization.Serializable
 enum class OrientationLock {
-    FOLLOW_SYSTEM, // 跟随系统
-    PORTRAIT,      // 竖屏锁定
-    LANDSCAPE,     // 横屏锁定
-    AUTO_ROTATE    // 自动旋转（允许传感器）
+    FOLLOW_SYSTEM,
+    PORTRAIT,
+    LANDSCAPE,
+    AUTO_ROTATE
 }
 
-/**
- * 主题自动切换模式。
- */
 @kotlinx.serialization.Serializable
 enum class ThemeAutoMode {
-    OFF,           // 关闭，使用用户选择的主题
-    FOLLOW_SYSTEM, // 跟随系统深色模式
-    SCHEDULE       // 按时间段（22:00-06:00 使用深色）
+    OFF,
+    FOLLOW_SYSTEM,
+    SCHEDULE
 }
 
-/**
- * 每日阅读目标。
- * dailyPages / dailyMinutes 为 0 时表示未启用对应目标。
- */
 @Immutable
 @kotlinx.serialization.Serializable
 data class ReadingGoals(
@@ -1605,20 +955,14 @@ data class ReadingGoals(
     val dailyMinutes: Int = 0
 )
 
-/**
- * 单日目标达成记录。
- */
 @Immutable
 @kotlinx.serialization.Serializable
 data class GoalHistoryEntry(
-    val date: String, // yyyy-MM-dd
+    val date: String,
     val pagesAchieved: Boolean = false,
     val minutesAchieved: Boolean = false
 )
 
-/**
- * 单书架扫描状态，用于检测新加入的漫画文件。
- */
 @Immutable
 @kotlinx.serialization.Serializable
 data class BookshelfScanState(
