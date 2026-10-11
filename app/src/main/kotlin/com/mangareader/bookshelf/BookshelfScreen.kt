@@ -496,6 +496,7 @@ fun BookshelfScreen(
                         sortBy = BookshelfSort.NAME
                         selectedCategory = null
                         searchQuery = ""
+                        debouncedSearchQuery = ""
                         isSearching = false
                     },
                     onShowCategoryDialog = { showCategoryDialog = true }
@@ -505,6 +506,7 @@ fun BookshelfScreen(
                     error = uiState.error,
                     rootUri = uiState.rootUri,
                     filteredComics = filteredComics,
+                    isBookshelfEmpty = uiState.comics.isEmpty(),
                     viewMode = viewMode,
                     isLoading = uiState.isLoading,
                     windowSize = windowSize,
@@ -526,6 +528,7 @@ fun BookshelfScreen(
                         filter = BookshelfFilter.ALL
                         selectedCategory = null
                         searchQuery = ""
+                        debouncedSearchQuery = ""
                     },
                     onOpenBrowser = onOpenBrowser
                 )

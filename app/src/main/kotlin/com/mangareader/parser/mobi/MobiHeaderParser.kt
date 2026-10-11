@@ -42,6 +42,8 @@ class MobiHeaderParser {
         private const val MOBI_CODEPAGE = 28           // 4 bytes
         private const val MOBI_VERSION = 36            // 4 bytes
         private const val MOBI_FIRST_IMAGE_INDEX = 108 // 4 bytes
+        private const val MOBI_HUFF_RECORD_OFFSET = 112 // 4 bytes: HUFF record 起始 record 索引
+        private const val MOBI_HUFF_RECORD_COUNT = 116  // 4 bytes: HUFF + CDIC record 数量
         private const val MOBI_FULL_NAME_OFFSET = 84   // 4 bytes (offset within record 0)
         private const val MOBI_FULL_NAME_LENGTH = 88   // 4 bytes
         private const val MOBI_EXTH_FLAGS = 128        // 4 bytes
@@ -98,6 +100,8 @@ class MobiHeaderParser {
         val codepage: Int = 1252,
         val version: Int = 0,
         val firstImageIndex: Int = -1,
+        val huffRecordIndex: Int = -1,
+        val huffRecordCount: Int = 0,
         val fullName: String = "",
         val locale: String = "",
         val charset: Charset = Charsets.UTF_8,
@@ -142,6 +146,8 @@ class MobiHeaderParser {
         val codepage = readInt32(buf, MOBI_CODEPAGE)
         val version = readInt32(buf, MOBI_VERSION)
         val firstImageIndex = readInt32(buf, MOBI_FIRST_IMAGE_INDEX)
+        val huffRecordIndex = readInt32(buf, MOBI_HUFF_RECORD_OFFSET)
+        val huffRecordCount = readInt32(buf, MOBI_HUFF_RECORD_COUNT)
         val fullNameOffset = readInt32(buf, MOBI_FULL_NAME_OFFSET)
         val fullNameLength = readInt32(buf, MOBI_FULL_NAME_LENGTH)
         val exthFlags = readInt32(buf, MOBI_EXTH_FLAGS)
@@ -216,6 +222,8 @@ class MobiHeaderParser {
             codepage = codepage,
             version = version,
             firstImageIndex = firstImageIndex,
+            huffRecordIndex = huffRecordIndex,
+            huffRecordCount = huffRecordCount,
             fullName = fullName,
             locale = locale,
             charset = charset,

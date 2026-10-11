@@ -46,6 +46,7 @@ internal fun BookshelfContent(
     error: String?,
     rootUri: android.net.Uri?,
     filteredComics: List<ComicEntry>,
+    isBookshelfEmpty: Boolean,
     viewMode: BookshelfViewMode,
     isLoading: Boolean,
     windowSize: WindowSizeClass,
@@ -98,24 +99,28 @@ internal fun BookshelfContent(
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
-            filteredComics.isEmpty() -> {
+            // 书架/当前目录本身没有任何漫画：显示「该目录下没有漫画」。
+            isBookshelfEmpty -> {
                 Text(
                     text = stringResource(R.string.bookshelf_no_comics_in_folder),
                     modifier = Modifier.align(Alignment.Center),
                     textAlign = TextAlign.Center
                 )
             }
+            // 目录里有漫画，但被筛选/搜索过滤后为空：显示无结果提示并提供「清除筛选」入口。
+            filteredComics.isEmpty() -> {
+                EmptyBookshelfState(
+                    hasSearch = debouncedSearchQuery.isNotBlank(),
+                    hasFilter = filter != BookshelfFilter.ALL || selectedCategory != null,
+                    isRoot = isAtRoot,
+                    onClearFilter = onClearFilter,
+                    onOpenBrowser = onOpenBrowser,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
             else -> {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    if (filteredComics.isEmpty() && !isLoading) {
-                        EmptyBookshelfState(
-                            hasSearch = debouncedSearchQuery.isNotBlank(),
-                            hasFilter = filter != BookshelfFilter.ALL || selectedCategory != null,
-                            isRoot = isAtRoot,
-                            onClearFilter = onClearFilter,
-                            onOpenBrowser = onOpenBrowser
-                        )
-                    } else if (viewMode == BookshelfViewMode.GRID) {
+                    if (viewMode == BookshelfViewMode.GRID) {
                         val minCell = when (windowSize) {
                             WindowSizeClass.TABLET -> 160.dp
                             WindowSizeClass.PHONE_LANDSCAPE -> 140.dp

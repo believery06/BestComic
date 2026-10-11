@@ -8,6 +8,7 @@ import com.mangareader.R
 import com.mangareader.data.ComicPage
 import com.mangareader.data.ComicType
 import com.mangareader.parser.mobi.MobiHeaderParser
+import com.mangareader.parser.mobi.HuffCdicDecoder
 import com.mangareader.parser.mobi.MobiHtmlParser
 import com.mangareader.parser.mobi.PalmDocDecoder
 import com.mangareader.parser.mobi.TextPageRenderer
@@ -259,6 +260,12 @@ class MobiParser : ComicParser {
         header: MobiHeaderParser.MobiHeader,
         headerRecordIndex: Int
     ): String {
+        // Huff/CDic 压缩（小说/文本型 MOBI 常见）：需要先加载 HUFF + CDIC record，
+        // 且文本 record 从 HUFF/CDIC 之后开始。PalmDOC/无压缩无需这些前置 record。
+        if (header.compression == PalmDocDecoder.COMPRESSION_HUFF) {
+            return extractHuffText(raf, pdbRecords, recordSizes, header, headerRecordIndex)
+        }
+
         val textStart = headerRecordIndex + 1
         val textCount = header.textRecordCount
         val firstImage = header.firstImageIndex
@@ -309,6 +316,122 @@ class MobiParser : ComicParser {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to decompress text records", e)
             ""
+        }
+    }
+
+    /**
+     * 解压 Huff/CDic 压缩的文本内容。
+     *
+     * 步骤：
+     * 1. 定位并加载 HUFF record（Huffman 码表）
+     * 2. 加载紧随其后的连续 CDIC record（短语字典）
+     * 3. 文本 record 位于 HUFF/CDIC 之后，逐条独立解码后拼接
+     */
+    private fun extractHuffText(
+        raf: RandomAccessFile,
+        pdbRecords: List<PdbRecordEntry>,
+        recordSizes: LongArray,
+        header: MobiHeaderParser.MobiHeader,
+        headerRecordIndex: Int
+    ): String {
+        val decoder = HuffCdicDecoder.Reader()
+
+        // 定位 HUFF record：优先头部字段，其次 header 后的第一条，最后 record 1
+        val candidates = listOf(header.huffRecordIndex, headerRecordIndex + 1, 1)
+        var huffStart = -1
+        for (cand in candidates) {
+            if (cand <= 0 || cand >= pdbRecords.size) continue
+            val bytes = readRecordBytes(raf, pdbRecords, recordSizes, cand) ?: continue
+            if (!HuffCdicDecoder.isHuffRecord(bytes)) continue
+            try {
+                decoder.loadHuff(bytes)
+                huffStart = cand
+                break
+            } catch (e: Exception) {
+                Log.w(TAG, "loadHuff failed at record $cand", e)
+            }
+        }
+        if (huffStart < 0) {
+            Log.w(TAG, "HUFF compression declared but no HUFF record found")
+            return ""
+        }
+
+        // 紧随 HUFF 之后的连续 CDIC records
+        var cdicCount = 0
+        var idx = huffStart + 1
+        while (idx < pdbRecords.size && cdicCount < 256) {
+            val bytes = readRecordBytes(raf, pdbRecords, recordSizes, idx) ?: break
+            if (!HuffCdicDecoder.isCdicRecord(bytes)) break
+            try {
+                decoder.loadCdic(bytes)
+            } catch (e: Exception) {
+                Log.w(TAG, "loadCdic failed at record $idx", e)
+                break
+            }
+            cdicCount++
+            idx++
+        }
+
+        val textStart = huffStart + 1 + cdicCount
+        val textCount = header.textRecordCount
+        val firstImage = header.firstImageIndex
+        val textEnd = if (firstImage > 0 && firstImage < pdbRecords.size) {
+            minOf(textStart + textCount, firstImage)
+        } else {
+            minOf(textStart + textCount, pdbRecords.size)
+        }
+
+        if (textStart >= textEnd || textEnd > pdbRecords.size) {
+            Log.i(TAG, "No HUFF text records (start=$textStart, end=$textEnd)")
+            return ""
+        }
+
+        Log.i(TAG, "HUFF text records $textStart..${textEnd - 1}, cdic=$cdicCount")
+
+        val out = java.io.ByteArrayOutputStream()
+        var total = 0L
+        for (i in textStart until textEnd) {
+            val size = recordSizes[i]
+            if (size <= 0 || size > MAX_ENTRY_BYTES) continue
+            if (total + size > MAX_DECOMPRESSED_BYTES) {
+                Log.w(TAG, "HUFF text exceeds max size, truncating at record $i")
+                break
+            }
+            val bytes = readRecordBytes(raf, pdbRecords, recordSizes, i) ?: continue
+            val decoded = try {
+                // 每条 record 是自包含的比特流，必须单独解码
+                decoder.unpack(bytes)
+            } catch (e: Exception) {
+                Log.w(TAG, "HUFF unpack failed at record $i", e)
+                ByteArray(0)
+            }
+            out.write(decoded, 0, decoded.size)
+            total += decoded.size
+        }
+
+        val raw = out.toByteArray()
+        Log.i(TAG, "HUFF decompressed ${textEnd - textStart} records -> ${raw.size} bytes")
+        return String(raw, header.charset).trimEnd('\u0000')
+    }
+
+    /** 读取指定 record 的完整字节（带大小与越界保护）。 */
+    private fun readRecordBytes(
+        raf: RandomAccessFile,
+        pdbRecords: List<PdbRecordEntry>,
+        recordSizes: LongArray,
+        index: Int
+    ): ByteArray? {
+        if (index < 0 || index >= pdbRecords.size) return null
+        val size = recordSizes[index]
+        if (size <= 0 || size > MAX_ENTRY_BYTES) return null
+        return try {
+            val bytes = ByteArray(size.toInt())
+            raf.seek(pdbRecords[index].offset)
+            raf.readFully(bytes)
+            bytes
+        } catch (e: Exception) {
+            Log.w(TAG, "read record $index failed", e)
+            null
         }
     }
 

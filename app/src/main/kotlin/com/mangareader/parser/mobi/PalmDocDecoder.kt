@@ -18,7 +18,7 @@ object PalmDocDecoder {
     /** PalmDOC 压缩类型标识。 */
     const val COMPRESSION_NONE = 1
     const val COMPRESSION_PALMDOC = 2
-    const val COMPRESSION_HUFF = 17480 // 0x4448，暂不支持
+    const val COMPRESSION_HUFF = 17480 // 0x4448，由 MobiParser 走 HuffCdicDecoder 分支处理
 
     /**
      * 解压 PalmDOC 压缩的数据。

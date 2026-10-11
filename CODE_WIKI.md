@@ -3425,4 +3425,25 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 82，`versionName` 1.0.82。
 - 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
+### 13.85 筛选空状态与小说型 MOBI（Huff/CDic）修复 (2026-10-11)
+
+#### 问题一：筛选后无结果时提示异常、无法清除筛选
+1. **现象**：选择筛选条件（收藏/未读/分类）或搜索后若无匹配项，只显示「该目录下没有漫画」，且没有「清除筛选」入口，表现为筛选功能异常。
+2. **根因**：`BookshelfContent` 的外层 `when` 先命中了 `filteredComics.isEmpty()` 分支并直接返回该文案，使其内部的 `EmptyBookshelfState`（区分「搜索无结果/筛选无结果」并提供清除按钮）成为永不渲染的死代码；组件也无法区分「书架本身为空」与「筛选后为空」。
+3. **修复**：为 `BookshelfContent` 新增 `isBookshelfEmpty` 参数（由 `uiState.comics.isEmpty()` 传入），重排判定顺序为：`error → rootUri==null → isBookshelfEmpty（真空目录）→ filteredComics.isEmpty()（EmptyBookshelfState，含清除筛选入口）→ 网格/列表`，并删除已失效的内层空状态分支。同时在两处清除筛选回调中即时重置 `debouncedSearchQuery`，避免 500ms 防抖延迟。
+
+#### 问题二：小说型 MOBI 无法阅读（漫画型 MOBI 正常）
+1. **现象**：图片型（漫画）MOBI 正常打开，文本型（小说）MOBI 无法阅读。
+2. **根因**：小说/文本型 MOBI 普遍采用 Huffman + CDIC 字典压缩（`compression=17480`），而 `PalmDocDecoder` 仅支持无压缩(1)与 PalmDOC(2)，遇到 Huff 直接抛出 `Unsupported compression`，导致文本解压为空、无页面可用；漫画型 MOBI 文本极少、多为 PalmDOC/无压缩，故不受影响。
+3. **修复**：
+   - 新增 `parser/mobi/HuffCdicDecoder.kt`：完整实现 HUFF 码表 + CDIC 短语字典解码（参考 calibre / KindleUnpack 的 huffcdic 算法），每条文本 record 独立解码（各自是自包含比特流）。
+   - `MobiHeaderParser` 解析新增字段 `huffRecordIndex`(偏移 112)、`huffRecordCount`(偏移 116)。
+   - `MobiParser.extractTextContent` 在 `compression == HUFF` 时改走 `extractHuffText`：定位并加载 HUFF record，随后加载连续的 CDIC record，文本 record 从 HUFF/CDIC 之后开始逐条解码拼接。
+
+#### 相关文件
+- 新增：`parser/mobi/HuffCdicDecoder.kt`
+- 修改：`bookshelf/BookshelfContent.kt`、`bookshelf/BookshelfScreen.kt`、`parser/MobiParser.kt`、`parser/mobi/MobiHeaderParser.kt`、`parser/mobi/PalmDocDecoder.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 83，`versionName` 1.0.83。
+- 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
 *文档更新时间：2026-10-11*
