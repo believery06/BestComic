@@ -116,17 +116,18 @@ fun MangaReaderApp(startUri: Uri? = null) {
     val onShowHistory = remember(navController) { { navController.navigate(Screen.History.route) } }
     val onOpenSettings = remember(navController) { { navController.navigate(Screen.Settings.route) } }
 
-    OnboardingHost(
-        onOpenHelp = { showHelpManually = true },
-        settingsRepository = settingsRepository,
+    // 主题包裹在 OnboardingHost 之外：引导/帮助弹窗此前位于主题之外，
+    // 会回退到 Material3 默认浅色（白）并盖住整个界面，造成「卡在白屏」。
+    MangaReaderTheme(
+        theme = appTheme.appTheme,
+        customSeedColor = appTheme.customSeedColor,
+        themeAutoMode = appTheme.themeAutoMode
     ) {
-        MangaReaderTheme(
-            theme = appTheme.appTheme,
-            customSeedColor = appTheme.customSeedColor,
-            themeAutoMode = appTheme.themeAutoMode
+        OnboardingHost(
+            onOpenHelp = { showHelpManually = true },
+            settingsRepository = settingsRepository,
         ) {
-            // 主题化根容器：统一应用深色/主题底色，避免此前位于主题之外、
-            // 回退到 Material3 默认浅色（白）Surface 造成的退出白屏。
+            // 主题化根容器：统一应用深色/主题底色，避免主题之外的 Surface 回退到默认浅色。
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background

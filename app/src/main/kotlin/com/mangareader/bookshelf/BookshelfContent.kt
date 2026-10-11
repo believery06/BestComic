@@ -195,7 +195,11 @@ internal fun BookshelfContent(
         PullRefreshIndicator(
             refreshing = isLoading,
             state = pullRefreshState,
-            modifier = Modifier.align(Alignment.TopCenter)
+            modifier = Modifier.align(Alignment.TopCenter),
+            // Material2 指示器在仅提供 Material3 主题时会回退到默认 lightColors()，
+            // 其 surface 为纯白，在深色书架上会出现白色圆块，故显式指定主题色。
+            backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.primary
         )
     }
 }

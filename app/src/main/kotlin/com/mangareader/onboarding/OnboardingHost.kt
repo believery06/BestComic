@@ -25,11 +25,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mangareader.R
 import com.mangareader.data.SettingsRepository
 import com.mangareader.utils.OnboardingUtils
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+
+/**
+ * 引导所需状态的聚合快照。
+ * [loaded] 用于区分「DataStore 尚未返回首帧」与「已加载但值为空/默认」：
+ * DataStore Flow 的初始值为 false/null，若据此判断会在每次冷启动瞬间误判为
+ * 「尚未选择书架目录」，导致重复弹出目录选择框。
+ */
+private data class OnboardingState(
+    val loaded: Boolean = false,
+    val permissionAck: Boolean = false,
+    val helpDontShow: Boolean = false,
+    val bookshelfRoot: String? = null
+)
 
 /**
  * Two-step first-run experience, hosted by the top-level NavHost in
@@ -56,12 +69,25 @@ fun OnboardingHost(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val permissionAck by settingsRepository.getPermissionAcknowledged()
-        .collectAsStateWithLifecycle(initialValue = false)
-    val helpDontShow by settingsRepository.getHelpDontShow()
-        .collectAsStateWithLifecycle(initialValue = false)
-    val bookshelfRoot by settingsRepository.getBookshelfRoot()
-        .collectAsStateWithLifecycle(initialValue = null)
+    // 将三个 DataStore Flow 聚合为单一状态，并记录是否已完成首帧加载。
+    // 未加载完成（loaded=false）时不评估弹窗条件，避免用默认值误判。
+    val onboardingState by produceState(initialValue = OnboardingState()) {
+        combine(
+            settingsRepository.getPermissionAcknowledged(),
+            settingsRepository.getHelpDontShow(),
+            settingsRepository.getBookshelfRoot()
+        ) { permissionAck, helpDontShow, bookshelfRoot ->
+            OnboardingState(
+                loaded = true,
+                permissionAck = permissionAck,
+                helpDontShow = helpDontShow,
+                bookshelfRoot = bookshelfRoot
+            )
+        }.collect { value = it }
+    }
+    val permissionAck = onboardingState.permissionAck
+    val helpDontShow = onboardingState.helpDontShow
+    val bookshelfRoot = onboardingState.bookshelfRoot
 
     var hasStorage by remember {
         mutableStateOf(OnboardingUtils.hasStoragePermission(context))
@@ -98,12 +124,17 @@ fun OnboardingHost(
         }
     }
 
-    // 当 permissionAck 与书架状态从 DataStore 加载完毕后，决定是否显示对话框
-    LaunchedEffect(permissionAck, bookshelfRoot) {
+    // 当引导状态从 DataStore 加载完毕后，决定是否显示对话框。
+    // 注意：必须等首次加载完成（loaded）才判断，且当已选择书架/已确认权限时
+    // 要显式收起对话框，避免冷启动默认值误判后弹窗一直停留。
+    LaunchedEffect(onboardingState) {
+        if (!onboardingState.loaded) return@LaunchedEffect
         val lowVersionNeedsPermission = !isAndroid11Plus && !OnboardingUtils.hasStoragePermission(context)
         val highVersionNeedsBookshelf = isAndroid11Plus && bookshelfRoot == null
         if (!permissionAck && (lowVersionNeedsPermission || highVersionNeedsBookshelf)) {
             showPermissionDialog = true
+        } else {
+            showPermissionDialog = false
         }
         if (permissionAck && !helpDontShow && !showHelpDialog) {
             showHelpDialog = true
@@ -171,7 +202,10 @@ private fun PermissionDialog(
     onClose: () -> Unit
 ) {
     AlertDialog(
-        onDismissRequest = { },
+        // 允许点击外部或系统返回键关闭（等价于「稍后」）。
+        // 原实现为 onDismissRequest = { }，一旦弹窗因状态误判残留，
+        // 返回键与点击外部均无效，用户会被卡死在弹窗上只能强制关闭应用。
+        onDismissRequest = onClose,
         title = { Text(stringResource(R.string.onboarding_permission_title)) },
         text = {
             Column {

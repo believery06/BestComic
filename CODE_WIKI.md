@@ -3466,4 +3466,30 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 84，`versionName` 1.0.84。
 - 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
+### 13.87 引导弹窗残留白屏与书架目录重复提示修复 (2026-10-11)
+
+#### 问题一：从漫画文件夹退回主页时无限白屏、按返回键/点屏幕均无反应
+1. **现象**：从分卷/章节浏览界面返回书架主页后，整屏纯白、无任何文字图标，且返回键与点击屏幕都无响应，只能强制关闭应用。
+2. **根因**：这是「引导弹窗状态残留」与「弹窗渲染在主题之外」两个缺陷叠加的结果。
+   - **弹窗状态残留**：`OnboardingHost` 用 `collectAsStateWithLifecycle(initialValue = false/null)` 收集 DataStore 值，冷启动首帧拿到的是默认值（`permissionAck = false`、`bookshelfRoot = null`），据此把 `showPermissionDialog` 置为 `true`；待真实值到达后条件不再成立，但原 `LaunchedEffect` **没有 else 分支复位**，弹窗永久残留。
+   - **弹窗落在主题之外**：`OnboardingHost` 原先包裹在 `MangaReaderTheme` 外层，其内部的 `PermissionDialog` 不受应用主题约束，回退到 Material3 baseline **浅色**配色（近白背景），铺满整屏即表现为「白屏」。
+   - **模态弹窗吞掉返回键**：该弹窗 `onDismissRequest = { }`，作为模态 `Dialog` 会拦截系统返回键与外部点击，用户无法关闭，被彻底卡死。
+3. **修复**：
+   - `OnboardingHost` 改为 `produceState(initialValue = OnboardingState())` 聚合三路 DataStore Flow，并用 `loaded` 标记区分「DataStore 首帧默认值」与「真实值」；`LaunchedEffect` 首行 `if (!loaded) return`，且条件不成立时显式 `showPermissionDialog = false`（新增 else 分支），杜绝残留。
+   - `MangaReaderApp` 将 `MangaReaderTheme` 提到 `OnboardingHost` 外层，使所有引导/帮助弹窗处于应用主题内，使用深色主题色而非回退浅色。
+   - `PermissionDialog` 的 `onDismissRequest` 由 `{ }` 改为 `onClose`，允许返回键/点击外部关闭（等价「稍后」），避免再次出现无法退出的死锁。
+
+#### 问题二：已选择书架目录，每次启动仍提示选择
+1. **现象**：用户已通过 SAF 选择书架目录，但每次冷启动仍弹出「选择书架目录」的引导框。
+2. **根因**：与问题一同源——冷启动首帧 `bookshelfRoot` 默认 `null`，条件判断在 DataStore 真实值返回前即触发了 `showPermissionDialog = true`，且缺少 else 复位，导致每次启动瞬间都误判并弹出。
+3. **修复**：上述 `loaded` 门控使弹窗判定只发生在 DataStore 首帧真实值到达之后；已选择目录时 `highVersionNeedsBookshelf` 为 false，不再弹出。
+
+#### 附带修复：深色书架下拉刷新出现白色圆块
+- Material2 `PullRefreshIndicator` 在仅提供 Material3 主题时会回退到 Material2 默认 `lightColors()`，其 `surface` 为纯白，在深色书架上显示为白色圆块；已显式传入 `backgroundColor = surfaceContainerHigh`、`contentColor = primary`。
+
+#### 相关文件
+- 修改：`onboarding/OnboardingHost.kt`、`MangaReaderApp.kt`、`bookshelf/BookshelfContent.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 85，`versionName` 1.0.85。
+- 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
 *文档更新时间：2026-10-11*
