@@ -729,6 +729,11 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         // 后台任务结束后安全释放缓存：先清理 L1 内存缓存，再释放处理后位图缓存。
         cacheManager.clearMemory()
         processedBitmapCache.evictAll()
+        // 退出阅读器（ViewModel 销毁）时同时清理页面/缩略图磁盘缓存，
+        // 避免退出应用后仍长期占用存储。磁盘删除为 IO 操作，放到应用级作用域执行。
+        MangaReaderApplication.applicationScope.launch(Dispatchers.IO) {
+            runCatching { cacheManager.clearDisk() }
+        }
         // ViewModel 销毁时 viewModelScope 已取消，改用 applicationScope 在后台异步保存。
         val sessionUri = comicUri
         val currentPage = _uiState.value.currentPage

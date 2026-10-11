@@ -3446,4 +3446,24 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 83，`versionName` 1.0.83。
 - 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
+### 13.86 阅读缓存膨胀与退出后残留修复 (2026-10-11)
+
+#### 问题：阅读时缓存大量占用，且退出应用后仍长期占用存储
+1. **现象**：阅读漫画时 `cacheDir` 迅速膨胀，甚至退出软件后仍占用大量存储空间。
+2. **根因**：
+   - **归档整本临时副本残留（主因）**：`cbr_temp_*` / `cbt_temp_*` / `mobi_temp_*` / `pdf_*` 是为支持随机访问，将 `content://`（SAF）源**整本复制**到 `cacheDir` 的临时文件，单个可达数百 MB，正常应在解析器 `close()` 时删除。但进程被系统回收（如退到后台后清理、滑掉最近任务）时 `close()` 不会执行，副本残留；而 `CacheCleaner` 仅在文件**超过 24 小时**时才清理，导致退出应用后大体积副本仍长期占用。
+   - **阅读磁盘缓存不随退出释放**：`page_cache`(30MB) + `thumb_cache`(10MB) 仅在 `DiskLruCache` 内部按 LRU 淘汰，退出阅读器/退到后台时只清理了内存缓存，磁盘缓存跨会话持续保留。
+   - **MOBI 临时文件未纳入统计与清理**：缓存管理页的临时文件前缀遗漏 `mobi_temp_` / `mobi_thumb_`，既不计入占用也无法通过按钮清理。
+   - **封面缩略图仅有数量上限**：`thumb_*.png` 仅限制 200 个文件，无总容量上限，PNG 封面偏大时仍可占用近百 MB。
+3. **修复**：
+   - `CacheCleaner.cleanOnStartup()` 改为按**进程启动时刻**判定：早于启动时刻的解析器临时文件/目录（`cbr_temp_*`、`cbt_temp_*`、`mobi_temp_*`、`pdf_*`、`cbt_index_*`、`source_share/*` 等）必定属于上一个已结束的进程，**无条件删除**，不再等待 24 小时；分享卡片与崩溃日志副本仍按 24 小时保留。
+   - `ReaderViewModel.onCleared()`（退出阅读器）与 `MangaReaderApplication.onTrimMemory(TRIM_MEMORY_UI_HIDDEN)`（退到后台）在 IO 线程调用 `PageCacheManager.clearDisk()`，清空页面/缩略图磁盘缓存，确保退出应用后不再残留。
+   - `CacheManagementScreen` 的统计与清理前缀补齐 `mobi_temp_` / `mobi_thumb_` / `temp_` / `cbr_temp_` / `cbt_temp_` / `cbt_index_`，与 `CacheCleaner` 保持一致。
+   - `CoverExtractor.cleanupOldCovers()` 除数量上限外，新增 24MB 总容量上限，按修改时间从最旧开始裁剪。
+
+#### 相关文件
+- 修改：`cache/CacheCleaner.kt`、`MangaReaderApplication.kt`、`reader/ReaderViewModel.kt`、`settings/CacheManagementScreen.kt`、`utils/CoverExtractor.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 84，`versionName` 1.0.84。
+- 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
 *文档更新时间：2026-10-11*

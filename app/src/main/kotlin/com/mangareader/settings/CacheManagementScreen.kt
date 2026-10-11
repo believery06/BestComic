@@ -50,6 +50,7 @@ fun CacheManagementScreen(
                 f.name.startsWith("cbt_") || f.name.startsWith("cb7_") || f.name.startsWith("zip_prov_") ||
                 f.name.startsWith("epub_") || f.name.startsWith("pdf_") || f.name.startsWith("tmp_") ||
                 f.name.startsWith("temp_") || f.name.startsWith("cbr_temp_") || f.name.startsWith("cbt_temp_") ||
+                f.name.startsWith("mobi_temp_") || f.name.startsWith("mobi_thumb_") ||
                 f.name.startsWith("cbz_") || f.name.startsWith("cbr_") || f.name.startsWith("cbt_index_") ||
                 f.name == "source_share" || f.name == "crash_logs"
             }?.sumOf {
@@ -149,7 +150,9 @@ fun CacheManagementScreen(
                         cacheDir.listFiles { f ->
                             f.name.startsWith("cbt_") || f.name.startsWith("cb7_") || f.name.startsWith("zip_prov_") ||
                             f.name.startsWith("epub_") || f.name.startsWith("pdf_") || f.name.startsWith("tmp_") ||
-                            f.name.startsWith("cbz_") || f.name.startsWith("cbr_") ||
+                            f.name.startsWith("temp_") || f.name.startsWith("cbr_temp_") || f.name.startsWith("cbt_temp_") ||
+                            f.name.startsWith("mobi_temp_") || f.name.startsWith("mobi_thumb_") ||
+                            f.name.startsWith("cbz_") || f.name.startsWith("cbr_") || f.name.startsWith("cbt_index_") ||
                             f.name == "source_share" || f.name == "crash_logs"
                         }?.forEach { it.deleteRecursively() }
                     }
@@ -167,7 +170,10 @@ fun CacheManagementScreen(
                             f.name == "share_cards" || f.name == "source_share" || f.name == "crash_logs" ||
                             f.name.startsWith("cbt_") || f.name.startsWith("cb7_") ||
                             f.name.startsWith("zip_prov_") || f.name.startsWith("epub_") || f.name.startsWith("pdf_") ||
-                            f.name.startsWith("tmp_") || f.name.startsWith("cbz_") || f.name.startsWith("cbr_")
+                            f.name.startsWith("tmp_") || f.name.startsWith("temp_") ||
+                            f.name.startsWith("cbr_temp_") || f.name.startsWith("cbt_temp_") ||
+                            f.name.startsWith("mobi_temp_") || f.name.startsWith("mobi_thumb_") ||
+                            f.name.startsWith("cbz_") || f.name.startsWith("cbr_") || f.name.startsWith("cbt_index_")
                         }?.forEach { it.deleteRecursively() }
                     }
                 },

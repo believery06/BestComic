@@ -8,29 +8,46 @@ import java.io.File
  *
  * 清理范围：
  * - 页面与缩略图磁盘缓存目录 page_cache、thumb_cache（仅由 DiskLruCache 自身 LRU 管理，启动时不全清）
+ * - 解析器遗留的临时归档副本与临时目录，如 content:// 源的 CBR/CBT/MOBI/PDF 整本副本、旧版解压目录
+ * - 分享源副本 source_share
  * - 分享卡片临时 PNG
- * - 分享源文件副本 source_share
  * - 崩溃日志导出副本 crash_logs
- * - 解析器泄漏的临时目录与文件，如 cbt/cb7 解压目录、zip_prov、epub、pdf 等临时文件
  *
  * 不清理：
  * - DataStore 中的书签、收藏、最近阅读、阅读进度等配置数据
- * - 封面缩略图，避免书架大量重新加载
+ * - 封面缩略图 thumb_*，避免书架大量重新加载（由 CoverExtractor 按数量/容量上限自行管理）
  */
 object CacheCleaner {
 
+    /** 分享卡片、崩溃日志副本等小文件的保留时长（保留一天便于用户取用）。 */
     private const val MAX_CACHE_AGE_MS = 24L * 60 * 60 * 1000
+
+    /** 解析器可能遗留的临时目录前缀（旧版整理解压目录）。 */
+    private val TEMP_DIR_PREFIXES = listOf("cbt_", "cb7_", "cbz_", "cbr_")
+
+    /**
+     * 解析器可能遗留的临时文件前缀。
+     * 其中 cbr_temp_ / cbt_temp_ / mobi_temp_ 为 content:// 源的整本副本，单个可达数百 MB。
+     */
+    private val TEMP_FILE_PREFIXES = listOf(
+        "zip_prov_", "epub_", "pdf_", "temp_", "tmp_",
+        "cbr_temp_", "cbt_temp_", "mobi_temp_", "mobi_thumb_",
+        "cbz_", "cbr_", "cbt_", "cb7_", "cbt_index_"
+    )
 
     fun cleanOnStartup(context: Context) {
         val cacheDir = context.cacheDir ?: return
-        // 不再清空 page_cache / thumb_cache：它们由 DiskLruCache 自身 LRU 策略管理，
-        // 启动时全清会失去跨会话缓存复用的意义，拖慢二次打开速度。
+        // 记录进程启动时刻：早于该时刻的临时文件必然由上一个已结束的进程创建，
+        // 当前进程不可能正在使用，因此可安全无条件删除，无需再等待 24 小时。
+        // 这是修复「读完退出应用后，数百 MB 的归档临时副本仍长期占用存储」的关键。
+        val startupTime = System.currentTimeMillis()
         runCatching { cleanShareCards(cacheDir) }
-        runCatching { cleanTransientDir(cacheDir, "source_share") }
-        runCatching { cleanTransientDir(cacheDir, "crash_logs") }
-        runCatching { cleanOldTempFiles(cacheDir) }
-        // PdfParser 在 cacheDir 空间不足时会回退到 filesDir，同样清理该处旧临时文件。
-        context.filesDir?.let { runCatching { cleanOldTempFiles(it) } }
+        runCatching { cleanStaleTempFiles(cacheDir, startupTime) }
+        // 分享源目录存放整本漫画副本，同样清理上一进程遗留。
+        runCatching { cleanStaleDirChildren(cacheDir, "source_share", startupTime) }
+        runCatching { cleanOldTransientDir(cacheDir, "crash_logs") }
+        // PdfParser 在 cacheDir 空间不足时会回退到 filesDir，同样清理该处遗留临时文件。
+        context.filesDir?.let { runCatching { cleanStaleTempFiles(it, startupTime) } }
     }
 
     /** 清理超过 [MAX_CACHE_AGE_MS] 的分享卡片临时 PNG。 */
@@ -54,44 +71,42 @@ object CacheCleaner {
     }
 
     /**
-     * 清理指定临时目录中超过 [MAX_CACHE_AGE_MS] 的旧文件。
-     * 不删除目录本身，避免影响正在进行的分享/导出操作。
+     * 删除目录中早于 [cutoffTime] 的解析器临时文件/目录。
+     * 早于当前进程启动时刻的文件必定属于上一个已结束的进程，可无条件删除。
      */
-    private fun cleanTransientDir(cacheDir: File, name: String) {
-        val now = System.currentTimeMillis()
+    private fun cleanStaleTempFiles(dir: File, cutoffTime: Long) {
+        dir.listFiles()?.forEach { child ->
+            if (child.lastModified() >= cutoffTime) return@forEach
+            when {
+                child.isDirectory && TEMP_DIR_PREFIXES.any { child.name.startsWith(it) } ->
+                    runCatching { child.deleteRecursively() }
+                child.isFile && TEMP_FILE_PREFIXES.any { child.name.startsWith(it) } ->
+                    runCatching { child.delete() }
+            }
+        }
+    }
+
+    /**
+     * 删除 [name] 目录中早于 [cutoffTime] 的子项，不删除目录本身。
+     * 用于清理分享源等「上一进程遗留」的临时副本。
+     */
+    private fun cleanStaleDirChildren(cacheDir: File, name: String, cutoffTime: Long) {
         File(cacheDir, name).listFiles()?.forEach { child ->
-            if (now - child.lastModified() > MAX_CACHE_AGE_MS) {
+            if (child.lastModified() < cutoffTime) {
                 runCatching { child.deleteRecursively() }
             }
         }
     }
 
     /**
-     * 清理解析器可能泄漏的临时文件/目录。
-     * 仅删除超过 [MAX_CACHE_AGE_MS] 的旧文件，避免误删当前正在使用的资源。
+     * 清理指定临时目录中超过 [MAX_CACHE_AGE_MS] 的旧文件。
+     * 不删除目录本身，避免影响正在进行的导出操作。
      */
-    private fun cleanOldTempFiles(cacheDir: File) {
+    private fun cleanOldTransientDir(cacheDir: File, name: String) {
         val now = System.currentTimeMillis()
-        // 旧版 CBT/CB7 整理解压遗留目录；新版 CBT 使用 cbt_temp_*.cbt 临时归档文件。
-        val tempDirPrefixes = listOf("cbt_", "cb7_", "cbz_", "cbr_")
-        // pdf_ 由 PdfRenderer.createTempFile 生成；cbr_temp_/cbt_temp_ 为 content:// 源回退副本；
-        // tmp_/temp_ 为通用临时文件；cbz_/cbr_/cbt_/cb7_ 为旧版解析器可能遗留的压缩包副本；
-        // mobi_temp_/mobi_thumb_ 为 MOBI 解析与封面提取的 content:// 源回退副本。
-        val tempFilePrefixes = listOf(
-            "zip_prov_", "epub_", "pdf_", "temp_", "tmp_",
-            "cbr_temp_", "cbt_temp_", "cbz_", "cbr_", "cbt_", "cb7_",
-            "cbt_index_", "mobi_temp_", "mobi_thumb_"
-        )
-
-        cacheDir.listFiles()?.forEach { child ->
-            if (child.isDirectory && tempDirPrefixes.any { child.name.startsWith(it) }) {
-                if (now - child.lastModified() > MAX_CACHE_AGE_MS) {
-                    runCatching { child.deleteRecursively() }
-                }
-            } else if (child.isFile && tempFilePrefixes.any { child.name.startsWith(it) }) {
-                if (now - child.lastModified() > MAX_CACHE_AGE_MS) {
-                    runCatching { child.delete() }
-                }
+        File(cacheDir, name).listFiles()?.forEach { child ->
+            if (now - child.lastModified() > MAX_CACHE_AGE_MS) {
+                runCatching { child.deleteRecursively() }
             }
         }
     }

@@ -67,8 +67,19 @@ class MangaReaderApplication : Application() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         when (level) {
-            // 应用进入后台且系统内存紧张，清空缓存池与内存缓存。
-            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN,
+            // 应用退到后台（界面不再可见，等同用户离开应用）：清空内存缓存并清理
+            // 阅读页面/缩略图磁盘缓存，避免退出应用后缓存仍长期占用存储。
+            // 磁盘删除为 IO 操作，放到应用级作用域执行，避免阻塞主线程。
+            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> {
+                BitmapPool.clear()
+                runCatching { PageCacheManager.getInstance(this).clearMemoryCache() }
+                    .onFailure { Log.e("MangaReaderApp", "清空内存缓存失败", it) }
+                applicationScope.launch {
+                    runCatching { PageCacheManager.getInstance(this@MangaReaderApplication).clearDisk() }
+                        .onFailure { Log.e("MangaReaderApp", "清理阅读磁盘缓存失败", it) }
+                }
+            }
+            // 应用正在前台但系统内存紧张，清空缓存池与内存缓存。
             ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
             ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW,
             ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {

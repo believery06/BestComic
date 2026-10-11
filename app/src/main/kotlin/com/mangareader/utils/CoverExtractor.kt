@@ -34,6 +34,8 @@ object CoverExtractor {
     private const val TAG = "CoverExtractor"
     private const val THUMB_MAX_SIZE = 480
     private const val MAX_COVER_CACHE_FILES = 200
+    /** 封面缩略图缓存总容量上限，避免封面文件数量不多但体积过大长期占用存储。 */
+    private const val MAX_COVER_CACHE_BYTES = 24L * 1024 * 1024
     /** 封面源文件单条目上限 50MB，防止恶意或损坏归档中的超大首图导致 OOM。 */
     private const val MAX_COVER_ENTRY_BYTES = 50L * 1024 * 1024
 
@@ -93,16 +95,23 @@ object CoverExtractor {
     }
 
     /**
-     * 封面缩略图数量超过上限时，按修改时间删除最旧的文件。
+     * 封面缩略图超出数量或总容量上限时，按修改时间从最旧的开始删除。
      */
     private fun cleanupOldCovers(context: Context) {
         val files = context.cacheDir.listFiles { _, name ->
             name.startsWith("thumb_") && name.endsWith(".png")
         } ?: return
-        if (files.size > MAX_COVER_CACHE_FILES) {
-            files.sortedBy { it.lastModified() }
-                .take(files.size - MAX_COVER_CACHE_FILES)
-                .forEach { runCatching { it.delete() } }
+        // 按最旧优先裁剪：先满足数量上限，再满足总容量上限。
+        val sorted = files.sortedBy { it.lastModified() }
+        var remaining = sorted.size
+        var totalBytes = sorted.sumOf { it.length() }
+        for (file in sorted) {
+            if (remaining <= MAX_COVER_CACHE_FILES && totalBytes <= MAX_COVER_CACHE_BYTES) break
+            val len = file.length()
+            if (runCatching { file.delete() }.getOrDefault(false)) {
+                remaining--
+                totalBytes -= len
+            }
         }
     }
 
