@@ -27,6 +27,14 @@ class ProgressSaver(
 
     private var progressJob: Job? = null
 
+    /**
+     * 打开漫画时设置翻页统计基线（通常为起始页/续读页）。
+     * 否则 lastRecordedPage 默认为 -1，续读到第 N 页会把前 N 页全部误算成本次新翻页。
+     */
+    fun setBaseline(page: Int) {
+        lastRecordedPage = page
+    }
+
     fun cancelPendingJob() {
         progressJob?.cancel()
         progressJob = null
@@ -78,14 +86,37 @@ class ProgressSaver(
         totalPages: Int
     ) {
         // 分卷模式下进度键包含分卷标题，整本漫画模式使用 URI 本身
-        val progressChapter = if (allChapters != null) chapter else ""
+        // 卷标题必须以「全局页码实际所在的分卷」为准：页内 chapterTitle 为空的散页
+        // 会被聚合进以漫画名命名的合成卷，继续按传入 chapter 匹配标题会找不到卷，
+        // 导致 chapterStart 累加成总页数、卷内页码恒为 0。
+        val effectiveChapter: String? = if (allChapters != null) {
+            var acc = 0
+            var found: String? = null
+            for (c in allChapters) {
+                if (clamped in acc until acc + c.pages.size) { found = c.title; break }
+                acc += c.pages.size
+            }
+            found ?: allChapters.lastOrNull()?.title ?: chapter
+        } else null
+        val progressChapter = effectiveChapter
+        // 分卷级键保存「卷内页码」；全局页码 clamped 需要减去该卷起始页。
+        val chapterPage = if (allChapters != null) {
+            var chapterStart = 0
+            for (c in allChapters) {
+                if (c.title == effectiveChapter) break
+                chapterStart += c.pages.size
+            }
+            (clamped - chapterStart).coerceAtLeast(0)
+        } else {
+            clamped
+        }
         // 同步更新漫画整体进度，保证书架阅读状态实时刷新
         val (overallProgress, overallTotal) = computeOverallProgress(clamped)
         // 合并为一次 DataStore 事务写入，降低快速翻页时的 IO 开销
         settingsRepository.saveReadingProgress(
             uri,
             progressChapter,
-            clamped,
+            chapterPage,
             overallProgress,
             overallTotal
         )

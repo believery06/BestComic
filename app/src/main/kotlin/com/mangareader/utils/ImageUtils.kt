@@ -383,27 +383,61 @@ object ImageUtils {
         val width = src.width
         val height = src.height
         if (width <= 0 || height <= 0) return src
+        val s = strength.coerceIn(0f, 3f)
+        if (s <= 0f) return src
+        // 真正的 3x3 锐化卷积：中心 1+4s、四邻域 -s（拉普拉斯锐化）。
+        // 旧实现用 ColorMatrix 跨通道负系数，只产生偏色而非锐化。
         return try {
+            val pixels = IntArray(width * height)
+            src.getPixels(pixels, 0, width, 0, 0, width, height)
+            val outPixels = IntArray(pixels.size)
+            val centerWeight = 1f + 4f * s
+
+            for (y in 0 until height) {
+                val rowOffset = y * width
+                val yUp = if (y > 0) -width else 0
+                val yDown = if (y < height - 1) width else 0
+                for (x in 0 until width) {
+                    val idx = rowOffset + x
+                    val center = pixels[idx]
+                    if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
+                        // 边缘像素不做卷积，避免越界
+                        outPixels[idx] = center
+                        continue
+                    }
+                    val top = pixels[idx + yUp]
+                    val bottom = pixels[idx + yDown]
+                    val left = pixels[idx - 1]
+                    val right = pixels[idx + 1]
+                    val a = (center ushr 24) and 0xFF
+                    val rr = clampChannel(
+                        (((center shr 16) and 0xFF) * centerWeight) -
+                                ((((top shr 16) and 0xFF) + ((bottom shr 16) and 0xFF) +
+                                        ((left shr 16) and 0xFF) + ((right shr 16) and 0xFF)) * s)
+                    )
+                    val gg = clampChannel(
+                        (((center shr 8) and 0xFF) * centerWeight) -
+                                ((((top shr 8) and 0xFF) + ((bottom shr 8) and 0xFF) +
+                                        ((left shr 8) and 0xFF) + ((right shr 8) and 0xFF)) * s)
+                    )
+                    val bb = clampChannel(
+                        ((center and 0xFF) * centerWeight) -
+                                ((((top and 0xFF) + (bottom and 0xFF) +
+                                        (left and 0xFF) + (right and 0xFF))) * s)
+                    )
+                    outPixels[idx] = (a shl 24) or (rr shl 16) or (gg shl 8) or bb
+                }
+            }
             val result = createBitmapSafe(width, height, Bitmap.Config.ARGB_8888) ?: return src
-            val canvas = Canvas(result)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-            val cm = ColorMatrix()
-            val s = strength.coerceIn(0f, 3f)
-            cm.set(
-                floatArrayOf(
-                    1 + s, -s / 2, 0f, 0f, 0f,
-                    -s / 2, 1 + s, -s / 2, 0f, 0f,
-                    0f, -s / 2, 1 + s, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            paint.colorFilter = ColorMatrixColorFilter(cm)
-            canvas.drawBitmap(src, 0f, 0f, paint)
+            result.setPixels(outPixels, 0, width, 0, 0, width, height)
             result
         } catch (e: Throwable) {
             src
         }
     }
+
+    private fun clampChannel(v: Float): Int =
+        if (v < 0f) 0 else if (v > 255f) 255 else v.toInt()
 
     private fun denoiseBitmap(src: Bitmap, strength: Float): Bitmap {
         val width = src.width
@@ -415,11 +449,14 @@ object ImageUtils {
     private fun fastBlur(src: Bitmap, radius: Int): Bitmap {
         val r = radius.coerceAtLeast(1)
         if (r <= 0) return src
+        val srcWidth = src.width
+        val srcHeight = src.height
+        if (srcWidth <= 1 || srcHeight <= 1) return src
         var b = src
         repeat(min(r, 5)) {
             val w = b.width
             val h = b.height
-            if (w <= 1 || h <= 1) return b
+            if (w <= 2 || h <= 2) return@repeat
             val out = createBitmapSafe(max(1, w / 2), max(1, h / 2), Bitmap.Config.ARGB_8888) ?: return b
             val canvas = Canvas(out)
             val paint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -429,7 +466,17 @@ object ImageUtils {
             if (b !== src && !b.isRecycled) runCatching { b.recycle() }
             b = out
         }
-        return b
+        if (b === src) return src
+        // 降采样模糊后必须放大回原始尺寸，否则开启降噪的页面会越变越小。
+        return try {
+            val upscaled = Bitmap.createScaledBitmap(b, srcWidth, srcHeight, true)
+            if (!b.isRecycled) runCatching { b.recycle() }
+            upscaled
+        } catch (e: Throwable) {
+            // 放大失败时返回原图，绝不能返回缩小图造成页面尺寸错乱。
+            if (!b.isRecycled) runCatching { b.recycle() }
+            src
+        }
     }
 
     fun createShareCard(src: Bitmap, comicTitle: String, pageLabel: String, appName: String): Bitmap? {

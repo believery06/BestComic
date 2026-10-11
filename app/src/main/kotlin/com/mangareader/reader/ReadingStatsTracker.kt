@@ -39,6 +39,8 @@ class ReadingStatsTracker(
     private var readingSessionStart: Long = 0L
     private val readingSessionActive = AtomicBoolean(false)
     private var goalToastShownDate: String = ""
+    /** 本次会话是否已上报过「读完」，避免在末页反复翻页或续读点恰在末页时重复计数。 */
+    private val finishReportedInSession = AtomicBoolean(false)
 
     /** 返回当前阅读会话已持续毫秒数；会话未激活时返回 0。 */
     fun currentSessionDurationMs(): Long {
@@ -48,10 +50,24 @@ class ReadingStatsTracker(
         } else 0L
     }
 
-    /** 开始一次新的阅读会话。 */
-    fun startSession() {
+    /**
+     * 开始一次新的阅读会话。
+     * 同时把开始时间持久化到 DataStore，供进程被回收后恢复时长；
+     * 必须在协程中调用。
+     */
+    suspend fun startSession(uri: Uri?) {
         readingSessionStart = System.currentTimeMillis()
         readingSessionActive.set(true)
+        finishReportedInSession.set(false)
+        if (uri != null) {
+            try {
+                withTimeoutOrNull(timeoutMs) {
+                    statsRepository.startReadingSession(uri)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "持久化阅读会话开始时间失败", e)
+            }
+        }
     }
 
     /**
@@ -81,7 +97,9 @@ class ReadingStatsTracker(
      */
     suspend fun recordProgress(currentPage: Int, lastRecordedPage: Int, pageCount: Int): Int {
         val delta = (currentPage - lastRecordedPage).coerceAtLeast(0)
-        val finished = currentPage >= (pageCount - 1).coerceAtLeast(0)
+        val reachedLastPage = currentPage >= (pageCount - 1).coerceAtLeast(0)
+        // 每次会话仅在「首次到达末页」时上报一次读完，去重重复进入/续读到末页的场景。
+        val finished = reachedLastPage && finishReportedInSession.compareAndSet(false, true)
         if (delta > 0 || finished) {
             statsRepository.updateReadingStats(pagesDelta = delta, comicFinished = finished)
             checkGoalCompletion()

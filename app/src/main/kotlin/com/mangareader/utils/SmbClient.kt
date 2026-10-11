@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -126,7 +127,14 @@ object SmbClient {
                     conn.inputStream.use { input ->
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
+                        var totalRead = 0L
                         while (input.read(buffer).also { bytesRead = it } >= 0) {
+                            // 服务器未给 Content-Length 或声明长度与实际不符时，
+                            // 仍要强制截断，防止恶意/异常流把内存撑爆。
+                            totalRead += bytesRead
+                            if (totalRead > maxSize) {
+                                throw IOException("远程文件超过 ${maxSize} 字节上限: $url")
+                            }
                             baos.write(buffer, 0, bytesRead)
                         }
                     }

@@ -169,12 +169,18 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    /**
+     * 按页面连续同名 run 聚合分卷，并按分卷名称智能排序。
+     * 必须与 ReaderViewModel.groupPagesInPageOrder 使用同一套标题规则（散页 run
+     * 使用漫画标题作为卷名），保证分卷卡片下标能正确映射到阅读器的分卷。
+     */
     private fun groupPagesIntoChapters(entry: ComicEntry, pages: List<ComicPage>): List<ComicChapter> {
-        val hasChapters = pages.any { it.chapterTitle.isNotEmpty() }
-        if (!hasChapters) {
+        val defaultTitle = entry.title.ifEmpty { entry.uri.lastPathSegment ?: "" }
+            .ifEmpty { getApplication<Application>().getString(R.string.chapter_browser_whole_volume) }
+        if (pages.none { it.chapterTitle.isNotEmpty() }) {
             return listOf(
                 ComicChapter(
-                    title = entry.title.ifEmpty { getApplication<Application>().getString(R.string.chapter_browser_whole_volume) },
+                    title = defaultTitle,
                     uri = entry.uri,
                     type = entry.type,
                     pages = pages
@@ -183,40 +189,22 @@ class ChapterBrowserViewModel(application: Application) : AndroidViewModel(appli
         }
 
         val result = mutableListOf<ComicChapter>()
-        var currentTitle = ""
-        var currentPages = mutableListOf<ComicPage>()
-        var indexInChapter = 0
-
-        for (page in pages) {
-            val title = page.chapterTitle
-            if (title.isNotEmpty() && title != currentTitle) {
-                if (currentPages.isNotEmpty()) {
-                    result.add(
-                        ComicChapter(
-                            title = currentTitle,
-                            uri = entry.uri,
-                            type = entry.type,
-                            pages = currentPages.mapIndexed { idx, p -> p.copy(index = idx) }
-                        )
-                    )
-                }
-                currentTitle = title
-                currentPages = mutableListOf()
-                indexInChapter = 0
+        var runStart = 0
+        while (runStart < pages.size) {
+            val rawTitle = pages[runStart].chapterTitle
+            var runEnd = runStart + 1
+            while (runEnd < pages.size && pages[runEnd].chapterTitle == rawTitle) {
+                runEnd++
             }
-            currentPages.add(page.copy(index = indexInChapter))
-            indexInChapter++
-        }
-
-        if (currentPages.isNotEmpty()) {
             result.add(
                 ComicChapter(
-                    title = currentTitle.ifEmpty { getApplication<Application>().getString(R.string.chapter_browser_unnamed) },
+                    title = rawTitle.ifEmpty { defaultTitle },
                     uri = entry.uri,
                     type = entry.type,
-                    pages = currentPages.mapIndexed { idx, p -> p.copy(index = idx) }
+                    pages = pages.subList(runStart, runEnd)
                 )
             )
+            runStart = runEnd
         }
 
         // 按分卷名称智能排序，识别卷号/Vol/番外等语义，避免文件顺序导致分卷列表顺序混乱

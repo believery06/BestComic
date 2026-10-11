@@ -116,7 +116,7 @@ class ReadingProgressRepository(private val context: Context) {
     ) {
         if (progressMap.isEmpty() && totalMap.isEmpty()) return
         context.userDataStore.edit { prefs ->
-            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS]).toMutableSet()
+            val tracked = decodeTrackedUris(prefs[KEY_TRACKED_URIS]).toMutableList()
             var changed = false
             val now = System.currentTimeMillis()
             for ((uri, page) in progressMap) {
@@ -129,9 +129,13 @@ class ReadingProgressRepository(private val context: Context) {
                 if (tracked.add(uri)) changed = true
             }
             if (changed) {
+                // 新写入的 URI 移到队首（MRU），take 截断时淘汰的是最旧条目；
+                // 旧实现把新 URI 追加到队尾，超过 500 后新漫画进度反而被丢弃。
+                val ordered = (progressMap.keys + totalMap.keys).reversed().toMutableSet()
+                ordered.addAll(tracked)
                 prefs[KEY_TRACKED_URIS] = json.encodeToString(
                     ListSerializer(String.serializer()),
-                    (tracked.toList().take(MAX_TRACKED_URIS))
+                    ordered.take(MAX_TRACKED_URIS)
                 )
             }
         }
@@ -147,9 +151,12 @@ class ReadingProgressRepository(private val context: Context) {
                 if (tracked.add(uri)) changed = true
             }
             if (changed) {
+                // 同 saveProgressBatch：新 URI 置于队首，避免超过上限后新条目被淘汰。
+                val ordered = times.keys.toMutableSet()
+                ordered.addAll(tracked)
                 prefs[KEY_TRACKED_URIS] = json.encodeToString(
                     ListSerializer(String.serializer()),
-                    tracked.toList().take(MAX_TRACKED_URIS)
+                    ordered.take(MAX_TRACKED_URIS)
                 )
             }
         }

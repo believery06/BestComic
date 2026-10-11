@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ReaderScreen(
     comicUri: Uri,
-    chapterUri: Uri? = null,
+    chapterIndex: Int = -1,
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     viewModel: ReaderViewModel = viewModel()
@@ -89,9 +89,9 @@ fun ReaderScreen(
     // 记录当前漫画是否已展示过卷末对话框，切换漫画时重置；使用 rememberSaveable 避免配置变更后重复弹出。
     var chapterEndShown by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(comicUri, chapterUri) {
+    LaunchedEffect(comicUri, chapterIndex) {
         chapterEndShown = false
-        viewModel.loadComicFromUri(comicUri, chapterUri)
+        viewModel.loadComicFromUri(comicUri, chapterIndex)
     }
 
     val volumeKeyHandler = remember(viewModel) {
@@ -155,12 +155,21 @@ fun ReaderScreen(
     var showExitConfirm by rememberSaveable { mutableStateOf(false) }
     var showChapterEndDialog by rememberSaveable { mutableStateOf(false) }
 
+    // 手动翻页到达卷末时，ViewModel 发送事件，弹出"跳转下一卷/已是最后一卷"对话框。
+    // 自动翻页与 TTS 连续朗读不经过此事件，避免打断 hands-free 阅读。
+    LaunchedEffect(Unit) {
+        viewModel.readerEvents.collect {
+            showChapterEndDialog = true
+        }
+    }
+
     // 卷末跳转对话框：derivedStateOf 只在 showChapterEndDialog 变化时重新计算，
     // 避免对话框显示期间频繁读取 ViewModel 状态导致不必要的计算。
+    // checkChapterEnd() 返回 Pair(是否在卷末, 是否最后一卷)，这里需要的是第二个分量。
     val chapterEndInfo by remember {
         derivedStateOf {
             if (showChapterEndDialog) {
-                viewModel.checkChapterEnd().first to viewModel.getNextChapterTitle()
+                viewModel.checkChapterEnd().second to viewModel.getNextChapterTitle()
             } else {
                 false to null
             }

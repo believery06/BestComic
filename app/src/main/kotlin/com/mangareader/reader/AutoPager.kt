@@ -25,8 +25,8 @@ class AutoPager(
         isMenuVisible: () -> Boolean,
         getState: () -> ReaderViewModel.ReaderUiState,
         loadPageBitmap: suspend (Int) -> Unit,
-        jumpToNextChapter: () -> Unit,
-        setCurrentPage: (Int) -> Unit,
+        advancePage: () -> Boolean,
+        getChapterTitle: () -> String,
         onStop: () -> Unit
     ) {
         stopAutoPage()
@@ -38,6 +38,8 @@ class AutoPager(
                 if (isMenuVisible()) continue
                 val state = getState()
                 if (state.totalPages <= 0) continue
+                // 双页步长仅用于「同卷内下一对页」的预加载；真正的翻页/跨卷统一走
+                // ViewModel.nextPage(autoContinue = true)，避免跨卷时跳过新卷首页。
                 val step = when {
                     !state.settings.dualPage -> 1
                     state.settings.dualPageStartOne -> {
@@ -55,25 +57,24 @@ class AutoPager(
                     }
                 }
                 val next = state.currentPage + step
-                if (next >= state.totalPages) {
-                    // 到达末尾时尝试进入下一章节，没有下一章再停止
-                    jumpToNextChapter()
-                    if (getCurrentPage(getState()) == state.currentPage) {
-                        stopAutoPage()
-                        onStop()
-                        break
-                    }
-                    // 进入新章节后多等待一倍时间，让用户看清封面/标题页。
-                    chapterJustChanged = true
-                } else {
-                    // 先预加载目标页再切换，避免自动翻页时闪烁
+                val titleBefore = getChapterTitle()
+                // 先预加载目标页再切换，避免自动翻页时闪烁；跨卷时目标页未知则跳过预加载。
+                if (next < state.totalPages) {
                     try {
                         loadPageBitmap(next)
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (_: Exception) {}
-                    setCurrentPage(next)
                 }
+                val moved = advancePage()
+                if (!moved) {
+                    // 已到全书最后一卷末尾
+                    stopAutoPage()
+                    onStop()
+                    break
+                }
+                // 进入新卷后多等待一倍时间，让用户看清封面/标题页。
+                chapterJustChanged = titleBefore != getChapterTitle()
             }
         }
     }
@@ -86,6 +87,4 @@ class AutoPager(
     fun setWasRunning(wasRunning: Boolean) {
         autoPageWasRunning = wasRunning
     }
-
-    private fun getCurrentPage(state: ReaderViewModel.ReaderUiState): Int = state.currentPage
 }

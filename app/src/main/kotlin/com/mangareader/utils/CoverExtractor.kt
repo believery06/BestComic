@@ -62,12 +62,31 @@ object CoverExtractor {
         val thumb = scaleDown(bitmap, THUMB_MAX_SIZE)
         if (thumb !== bitmap && !bitmap.isRecycled) bitmap.recycle()
 
-        FileOutputStream(cacheFile).use { out ->
-            thumb.compress(Bitmap.CompressFormat.PNG, 85, out)
+        // 先写临时文件再原子改名：写入中途进程被杀不会留下损坏的半截 PNG，
+        // 否则之后会永久命中 exists() 的坏封面且无法自愈。
+        val tmpFile = File(context.cacheDir, "thumb_${cacheKey}.png.tmp")
+        var ok = false
+        try {
+            FileOutputStream(tmpFile).use { out ->
+                ok = thumb.compress(Bitmap.CompressFormat.PNG, 85, out)
+            }
+            if (!ok) {
+                tmpFile.delete()
+                return@withContext null
+            }
+            if (!tmpFile.renameTo(cacheFile)) {
+                // 极端情况下 rename 失败（如跨挂载点），退化为直接复制写入
+                tmpFile.inputStream().use { input ->
+                    FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
+                }
+                tmpFile.delete()
+            }
+        } finally {
+            runCatching { if (!thumb.isRecycled) thumb.recycle() }
+            runCatching { if (tmpFile.exists()) tmpFile.delete() }
         }
-        thumb.recycle()
 
-        if (cacheFile.exists()) {
+        if (cacheFile.exists() && cacheFile.length() > 0) {
             cleanupOldCovers(context)
             Uri.fromFile(cacheFile)
         } else null

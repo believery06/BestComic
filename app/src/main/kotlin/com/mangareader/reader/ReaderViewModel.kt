@@ -11,7 +11,6 @@ import androidx.lifecycle.viewModelScope
 import com.mangareader.data.ComicChapter
 import com.mangareader.data.ComicEntry
 import com.mangareader.data.ComicPage
-import com.mangareader.data.ComicType
 import com.mangareader.data.ReadingHistoryEntry
 import com.mangareader.MangaReaderApplication
 import com.mangareader.R
@@ -23,7 +22,6 @@ import com.mangareader.data.ZoomMode
 import com.mangareader.cache.PageCacheManager
 import com.mangareader.parser.ComicParser
 import com.mangareader.parser.ParserFactory
-import com.mangareader.parser.ParserResult
 import com.mangareader.parser.VolumeSortHelper
 import com.mangareader.data.ComicProvider
 import com.mangareader.provider.ParserBasedComicProvider
@@ -50,6 +48,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
@@ -110,6 +111,19 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     // 分镜模式状态
     private val _panelState = MutableStateFlow(PanelViewState())
     val panelState: StateFlow<PanelViewState> = _panelState.asStateFlow()
+
+    /**
+     * 阅读器一次性 UI 事件（如卷末提示弹窗）。
+     * 使用 BUFFERED Channel 保证配置切换/快速翻页时事件不丢失。
+     */
+    sealed interface ReaderEvent {
+        data object ShowChapterEnd : ReaderEvent
+    }
+
+    // CONFLATED：卷末连发（用户连点）只保留一个待处理事件，
+    // 避免事件堆积在 Channel 中导致关闭对话框后又被旧事件立即重新弹出。
+    private val _readerEvents = Channel<ReaderEvent>(Channel.CONFLATED)
+    val readerEvents: Flow<ReaderEvent> = _readerEvents.receiveAsFlow()
 
     // 书签列表由 BookmarkManager 维护，避免 ReaderViewModel 直接持有 MutableStateFlow
     val bookmarks: StateFlow<List<Int>> = bookmarkManager.bookmarks
@@ -189,10 +203,10 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             onPageFinished = { id ->
                 // 仅当回调对应最近一次 speak 调用时才继续，避免快速翻页/取消后的过期回调引发竞态。
                 if (id == ttsController.currentTtsUtteranceId.get()) {
-                    nextPage()
+                    nextPage(autoContinue = true)
                 }
             },
-            onNeedNextPage = { nextPage() }
+            onNeedNextPage = { nextPage(autoContinue = true) }
         )
         viewModelScope.launch {
             settingsRepository.readerSettings.collect { settings ->
@@ -215,119 +229,103 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 从 URI 加载漫画，支持指定分卷 URI。
+     * 从 URI 加载漫画。
+     *
+     * 统一采用「整本解析 + 按页内分卷标记分组」的模型：所有分卷共享同一条页面列表与同一套
+     * 全局页码，分卷切换只是页码跳转，避免按分卷切片加载导致的页码错乱/资源重建。
+     *
+     * @param chapterIndex 指定打开的分卷在「按名称排序后的分卷列表」中的下标（与分卷浏览页一致）；
+     *                    -1 表示整本/续读模式，按已保存的整体阅读进度恢复页码。
      */
-    fun loadComicFromUri(comicUri: Uri, chapterUri: Uri? = null) {
-        val entry = ComicEntry(
-            uri = comicUri,
-            title = comicUri.lastPathSegment ?: "",
-            type = ParserFactory.detectType(comicUri.lastPathSegment ?: "")
-        )
-        // 分卷模式：需要先解析整本漫画获取分卷列表，再找到目标分卷
-        if (chapterUri != null && chapterUri != comicUri) {
-            viewModelScope.launch {
-                try {
-                    val parser = ParserFactory.getParser(ComicType.COMIC_BOOK)
-                    if (parser != null) {
-                        val result = withContext(Dispatchers.IO) {
-                            parser.parse(getApplication(), comicUri)
-                        }
-                        if (result is ParserResult.Success) {
-                            val pages = result.pages
-                            // 按 chapterTitle 分组为 ComicChapter 列表
-                            val chapters = groupPagesIntoChapters(pages)
-                            val targetChapter = chapters.find { it.uri == chapterUri }
-                                ?: chapters.find { chapterUri.toString().contains(it.title, ignoreCase = true) }
-                            if (targetChapter != null) {
-                                loadComic(entry, targetChapter.pages, chapters)
-                                return@launch
-                            }
-                        }
-                    }
-                    // 回退：直接加载整本漫画
-                    loadComic(entry)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e(TAG, "从 URI 加载分卷失败，回退到整本加载", e)
-                    loadComic(entry)
-                }
+    fun loadComicFromUri(comicUri: Uri, chapterIndex: Int = -1) {
+        val title = comicUri.lastPathSegment ?: ""
+        viewModelScope.launch {
+            // 打开前恢复整体阅读进度（修复此前每次都从第 0 页开始的问题）。
+            val savedPage = try {
+                settingsRepository.getProgress(comicUri).first().coerceAtLeast(0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                0
             }
-        } else {
-            loadComic(entry)
+            val detectedType = ParserFactory.detectType(title)
+            val entry = ComicEntry(
+                uri = comicUri,
+                title = title,
+                type = detectedType,
+                // SAF tree URI（如 primary:Comics/xx）无扩展名，detectType 会返回 UNKNOWN，
+                // 这类 URI 实际是目录，需要走 ComicBookParser（其内部会回退 FolderParser）。
+                isDirectory = detectedType == com.mangareader.data.ComicType.FOLDER ||
+                        detectedType == com.mangareader.data.ComicType.COMIC_BOOK ||
+                        detectedType == com.mangareader.data.ComicType.UNKNOWN,
+                lastReadPage = savedPage
+            )
+            loadComic(entry, chapterIndex)
         }
     }
 
     /**
-     * 将页面列表按 chapterTitle 分卷。
+     * 按页面在列表中的实际顺序（连续同名页片）聚合分卷，分卷的 [ComicChapter.pages]
+     * 直接引用整本页面列表的子区间，保证全局页码连续、与 Provider 下标一致。
+     * 所有页面均无分卷标记（单文件漫画/纯散页文件夹）时，合成一个与分卷浏览页
+     * 「整本」卡片一一对应的单卷，使用户点击该卡片能从第 0 页打开（而非续读）。
      */
-    private fun groupPagesIntoChapters(pages: List<ComicPage>): List<ComicChapter> {
+    private fun groupPagesInPageOrder(entry: ComicEntry, pages: List<ComicPage>): List<ComicChapter> {
         if (pages.isEmpty()) return emptyList()
-        val hasChapters = pages.any { it.chapterTitle.isNotEmpty() }
-        if (!hasChapters) {
-            val uri = comicUri ?: Uri.EMPTY
+        val defaultTitle = entry.title.ifEmpty { entry.uri.lastPathSegment ?: "" }
+        if (pages.none { it.chapterTitle.isNotEmpty() }) {
             return listOf(
                 ComicChapter(
-                    title = _uiState.value.title.ifEmpty { uri.lastPathSegment ?: "" },
-                    uri = uri,
-                    type = ComicType.UNKNOWN,
+                    title = defaultTitle,
+                    uri = entry.uri,
+                    type = entry.type,
                     pages = pages
                 )
             )
         }
-
         val result = mutableListOf<ComicChapter>()
-        var currentTitle = ""
-        var currentPages = mutableListOf<ComicPage>()
-        var indexInChapter = 0
-
-        for (page in pages) {
-            val title = page.chapterTitle
-            if (title.isNotEmpty() && title != currentTitle) {
-                if (currentPages.isNotEmpty()) {
-                    val uri = comicUri ?: Uri.EMPTY
-                    result.add(
-                        ComicChapter(
-                            title = currentTitle,
-                            uri = uri,
-                            type = ComicType.UNKNOWN,
-                            pages = currentPages.mapIndexed { idx, p -> p.copy(index = idx) }
-                        )
-                    )
-                }
-                currentTitle = title
-                currentPages = mutableListOf()
-                indexInChapter = 0
+        var runStart = 0
+        while (runStart < pages.size) {
+            val rawTitle = pages[runStart].chapterTitle
+            var runEnd = runStart + 1
+            while (runEnd < pages.size && pages[runEnd].chapterTitle == rawTitle) {
+                runEnd++
             }
-            currentPages.add(page.copy(index = indexInChapter))
-            indexInChapter++
-        }
-
-        if (currentPages.isNotEmpty()) {
-            val uri = comicUri ?: Uri.EMPTY
             result.add(
                 ComicChapter(
-                    title = currentTitle.ifEmpty { uri.lastPathSegment ?: "" },
-                    uri = uri,
-                    type = ComicType.UNKNOWN,
-                    pages = currentPages.mapIndexed { idx, p -> p.copy(index = idx) }
+                    title = rawTitle.ifEmpty { defaultTitle },
+                    uri = entry.uri,
+                    type = entry.type,
+                    pages = pages.subList(runStart, runEnd)
                 )
             )
+            runStart = runEnd
         }
+        return result
+    }
 
-        return result.sortedWith { a, b -> VolumeSortHelper.compareNames(a.title, b.title) }
+    /** 返回全局页码 [page] 所在分卷在 [chapters]（页面顺序）中的下标，无分卷时返回 -1。 */
+    private fun chapterIndexForPage(chapters: List<ComicChapter>?, page: Int): Int {
+        if (chapters.isNullOrEmpty()) return -1
+        if (page < 0) return -1
+        var acc = 0
+        for (i in chapters.indices) {
+            val size = chapters[i].pages.size
+            if (page < acc + size) return i
+            acc += size
+        }
+        return chapters.lastIndex
     }
 
     fun loadComic(
         entry: ComicEntry,
-        chapterPages: List<ComicPage>? = null,
-        allChapters: List<ComicChapter>? = null
+        initialChapterIndex: Int = -1
     ) {
         // 取消旧的加载任务
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             try {
-                loadComicInternal(entry, chapterPages, allChapters)
+                loadComicInternal(entry, initialChapterIndex)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -339,8 +337,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun loadComicInternal(
         entry: ComicEntry,
-        chapterPages: List<ComicPage>?,
-        allChapters: List<ComicChapter>?
+        initialChapterIndex: Int
     ) {
         // 显示加载状态
         _uiState.value = _uiState.value.copy(isLoading = true, error = null)
@@ -348,8 +345,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         // 关闭旧的 parser 和 provider，避免资源泄漏
         pageLoader.releaseResources()
 
-        // 使用 pageLoader 解析页面
-        val pages = pageLoader.resolvePages(entry, chapterPages)
+        // 整本解析：始终加载完整页面列表，分卷通过 chapterTitle 在页内标记区分
+        val pages = pageLoader.resolvePages(entry, null)
 
         if (pages.isEmpty()) {
             _uiState.value = _uiState.value.copy(
@@ -359,44 +356,60 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
+        // 页面顺序的分卷列表（页码计算以此为准）
+        val chaptersInPageOrder = groupPagesInPageOrder(entry, pages)
+        val chapters = chaptersInPageOrder.takeIf { it.isNotEmpty() }
+
+        // 分卷浏览页传的是「按名称排序」后的下标，这里通过标题映射回页面顺序的分卷下标。
+        // 混合（散页+章节文件+子目录）等极端场景下顺序可能不同，标题映射更稳健。
+        val targetPageOrderIndex = if (initialChapterIndex >= 0 && chapters != null) {
+            val sortedChapters = chapters.sortedWith { a, b ->
+                VolumeSortHelper.compareNames(a.title, b.title)
+            }
+            sortedChapters.getOrNull(initialChapterIndex)?.let { target ->
+                chapters.indexOfFirst { it.title == target.title }
+            } ?: -1
+        } else {
+            -1
+        }
+
         // 更新 pageLoader 状态
         pageLoader.updatePages(pages, pageLoader.getProvider())
-        pageLoader.updateChapters(allChapters, allChapters?.indexOfFirst {
-            it.pages.firstOrNull()?.chapterTitle == pages.firstOrNull()?.chapterTitle
-        }?.takeIf { it >= 0 } ?: -1)
 
-        comicUri = entry.uri
-        currentComicEntry = entry
-
-        // 计算当前章节索引
-        val currentChapterIdx = allChapters?.indexOfFirst { chapter ->
-            chapter.pages.size == pages.size &&
-                    chapter.pages.zip(pages).all { (a, b) -> a.name == b.name }
-        } ?: -1
-        pageLoader.setCurrentChapterIndex(currentChapterIdx)
-
-        // 更新 UI 状态
         val totalPages = pages.size
-        val startPage = if (currentChapterIdx >= 0 && allChapters != null) {
-            // 分卷模式：计算当前章节在整本漫画中的起始页
-            val prevPages = allChapters.take(currentChapterIdx).sumOf { it.pages.size }
-            prevPages + entry.lastReadPage
+        // 指定分卷打开：定位到该分卷首页；续读/整本：使用已保存的整体进度。
+        val startPage = if (targetPageOrderIndex >= 0 && chapters != null) {
+            chapters.take(targetPageOrderIndex).sumOf { it.pages.size }
         } else {
             entry.lastReadPage
         }
         val clampedStart = startPage.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+        val startChapterIndex = chapterIndexForPage(chapters, clampedStart)
 
+        pageLoader.updateChapters(chapters, startChapterIndex)
+
+        comicUri = entry.uri
+        currentComicEntry = entry
+
+        // 绑定书签上下文（修复此前未调用导致书签增删/持久化全部失效的问题）
+        bookmarkManager.setComicUri(entry.uri)
+
+        // 更新 UI 状态
         _uiState.value = _uiState.value.copy(
             title = entry.title,
             currentPage = clampedStart,
             totalPages = totalPages,
             isLoading = false,
             error = null,
-            currentChapter = pages.getOrNull(clampedStart)?.chapterTitle ?: ""
+            currentChapter = chapters?.getOrNull(startChapterIndex)?.title
+                ?: (pages.getOrNull(clampedStart)?.chapterTitle ?: "")
         )
 
-        // 开始新的阅读会话
-        statsTracker.startSession()
+        // 开始新的阅读会话（持久化开始时间，供阅读时长统计与进程被杀后恢复）
+        statsTracker.startSession(entry.uri)
+
+        // 翻页统计基线设为起始页，避免续读时把已读页全部重复计入本次翻页数
+        progressSaver.setBaseline(clampedStart)
 
         // 触发进度保存
         comicUri?.let { uri ->
@@ -416,128 +429,144 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun nextPage() {
-        val state = _uiState.value
-        if (state.totalPages <= 0) return
-        val step = when {
-            !state.settings.dualPage -> 1
-            state.settings.dualPageStartOne -> {
-                val offset = state.settings.dualPageOffset.coerceIn(0, 5)
-                val shifted = (state.currentPage - offset).coerceAtLeast(0)
-                if (shifted % 2 == 0) 2 else 1
-            }
-            else -> {
-                val offset = state.settings.dualPageOffset.coerceIn(0, 5)
-                val shifted = (state.currentPage - offset).coerceAtLeast(0)
-                when (shifted) {
-                    0 -> 1
-                    else -> if (shifted % 2 == 0) 1 else 2
-                }
+    /**
+     * 双页模式下，从当前页翻到下一对页需要前进/后退的页数。
+     * 提取为公共方法，保证点击、自动翻页与卷末判断逻辑一致。
+     */
+    private fun dualPageStep(currentPage: Int, settings: com.mangareader.data.ReaderSettings): Int {
+        if (!settings.dualPage) return 1
+        val offset = settings.dualPageOffset.coerceIn(0, 5)
+        val shifted = (currentPage - offset).coerceAtLeast(0)
+        return if (settings.dualPageStartOne) {
+            if (shifted % 2 == 0) 2 else 1
+        } else {
+            when (shifted) {
+                0 -> 1
+                else -> if (shifted % 2 == 0) 1 else 2
             }
         }
+    }
+
+    /**
+     * 下一页。
+     * @param autoContinue 自动翻页/TTS 连续朗读时为 true：跨卷不弹窗，直接进入下一卷；
+     *                     手动翻页为 false：到达卷末时发送事件弹出跳转确认对话框。
+     * @return 是否发生了实际翻页（自动模式下用于判断是否已到全书末尾）
+     */
+    fun nextPage(autoContinue: Boolean = false): Boolean {
+        val state = _uiState.value
+        if (state.totalPages <= 0) return false
+        val step = dualPageStep(state.currentPage, state.settings)
         val next = state.currentPage + step
+        val chapters = pageLoader.allChapters
+        val currentIdx = chapterIndexForPage(chapters, state.currentPage)
+
         if (next >= state.totalPages) {
-            // 检查是否到达最后一卷末
-            val chapters = pageLoader.allChapters
-            val currentIdx = pageLoader.currentChapterIndex
-            if (chapters != null && currentIdx < chapters.size - 1) {
-                // 还有下一卷
-                jumpToNextChapter()
+            // 已到全书末尾
+            val hasNextChapter = chapters != null && currentIdx in 0 until chapters.size - 1
+            if (hasNextChapter) {
+                return if (autoContinue) {
+                    jumpToNextChapter()
+                } else {
+                    _readerEvents.trySend(ReaderEvent.ShowChapterEnd)
+                    false
+                }
+            } else {
+                if (!autoContinue) {
+                    // 最后一卷末尾：弹出"已是最后一卷"提示
+                    _readerEvents.trySend(ReaderEvent.ShowChapterEnd)
+                }
+                return false
             }
-            // 否则停在最后一页（不做任何操作）
+        }
+
+        val nextIdx = chapterIndexForPage(chapters, next)
+        val crossedChapter = chapters != null && currentIdx in 0 until chapters.size - 1 &&
+                nextIdx > currentIdx
+        return if (crossedChapter) {
+            if (autoContinue) {
+                // 自动模式：进入下一卷首页，保证双页模式下不会把两卷拼成一对页或跳过新卷首页
+                jumpToNextChapter()
+            } else {
+                _readerEvents.trySend(ReaderEvent.ShowChapterEnd)
+                false
+            }
         } else {
             setCurrentPage(next)
+            true
         }
     }
 
     fun previousPage() {
         val state = _uiState.value
         if (state.totalPages <= 0) return
-        val step = when {
-            !state.settings.dualPage -> 1
-            state.settings.dualPageStartOne -> {
-                val offset = state.settings.dualPageOffset.coerceIn(0, 5)
-                val shifted = (state.currentPage - offset).coerceAtLeast(0)
-                if (shifted % 2 == 0) 2 else 1
-            }
-            else -> {
-                val offset = state.settings.dualPageOffset.coerceIn(0, 5)
-                val shifted = (state.currentPage - offset).coerceAtLeast(0)
-                when (shifted) {
-                    0 -> 1
-                    else -> if (shifted % 2 == 0) 1 else 2
-                }
-            }
-        }
+        val step = dualPageStep(state.currentPage, state.settings)
         val prev = state.currentPage - step
+        val chapters = pageLoader.allChapters
+        val currentIdx = chapterIndexForPage(chapters, state.currentPage)
+
         if (prev < 0) {
-            // 检查是否在第一卷开头
-            val chapters = pageLoader.allChapters
-            val currentIdx = pageLoader.currentChapterIndex
             if (chapters != null && currentIdx > 0) {
-                // 还有上一卷，跳到上一卷末尾
+                // 第一卷之前还有上一卷，跳到上一卷末尾
                 jumpToPrevChapter()
             }
             // 否则停在第一页
+            return
+        }
+
+        val prevChapterIdx = chapterIndexForPage(chapters, prev)
+        if (chapters != null && currentIdx >= 0 && prevChapterIdx < currentIdx) {
+            // 跨入上一卷：直接跳到上一卷末尾
+            jumpToPrevChapter()
         } else {
             setCurrentPage(prev)
         }
     }
 
-    fun jumpToNextChapter() {
-        val chapters = pageLoader.allChapters ?: return
-        val currentIdx = pageLoader.currentChapterIndex
+    /** 跳到下一卷的首页（全局页码跳转，无需重新解析漫画）。@return 是否成功跳转 */
+    fun jumpToNextChapter(): Boolean {
+        val chapters = pageLoader.allChapters ?: return false
+        val currentIdx = chapterIndexForPage(chapters, _uiState.value.currentPage)
         val nextIdx = currentIdx + 1
         if (nextIdx in chapters.indices) {
-            val nextChapter = chapters[nextIdx]
-            // 使用 pageLoader 更新状态
-            pageLoader.updatePages(nextChapter.pages, pageLoader.getProvider())
-            pageLoader.setCurrentChapterIndex(nextIdx)
-            // 重新加载漫画（使用新的章节页面）
-            currentComicEntry?.let { entry ->
-                loadComic(
-                    entry = entry,
-                    chapterPages = nextChapter.pages,
-                    allChapters = chapters
-                )
-            }
+            val start = chapters.take(nextIdx).sumOf { it.pages.size }
+            if (start == _uiState.value.currentPage) return false
+            setCurrentPage(start)
+            return true
         }
+        return false
     }
 
-    fun jumpToPrevChapter() {
-        if (pageLoader.pages.isEmpty()) return
-        val currentChapter = pageLoader.pages.getOrNull(_uiState.value.currentPage)?.chapterTitle ?: return
-        for (i in (_uiState.value.currentPage - 1) downTo 0) {
-            if (pageLoader.pages[i].chapterTitle.isNotEmpty() && pageLoader.pages[i].chapterTitle != currentChapter) {
-                // 找到上一章的最后一页
-                var lastPage = i
-                while (lastPage + 1 < pageLoader.pages.size && pageLoader.pages[lastPage + 1].chapterTitle == pageLoader.pages[i].chapterTitle) {
-                    lastPage++
-                }
-                setCurrentPage(lastPage)
-                return
-            }
-        }
+    /** 跳到上一卷的最后一页（全局页码跳转，无需重新解析漫画）。@return 是否成功跳转 */
+    fun jumpToPrevChapter(): Boolean {
+        val chapters = pageLoader.allChapters ?: return false
+        val currentIdx = chapterIndexForPage(chapters, _uiState.value.currentPage)
+        if (currentIdx <= 0) return false
+        val prevChapter = chapters[currentIdx - 1]
+        val prevStart = chapters.take(currentIdx - 1).sumOf { it.pages.size }
+        val target = prevStart + prevChapter.pages.size - 1
+        if (target == _uiState.value.currentPage) return false
+        setCurrentPage(target)
+        return true
     }
 
     /**
      * 检查是否到达章节末尾。
+     * @return Pair(是否在当前卷末尾, 是否已是最后一卷)
      */
     fun checkChapterEnd(): Pair<Boolean, Boolean> {
         val state = _uiState.value
         val chapters = pageLoader.allChapters
-        val currentIdx = pageLoader.currentChapterIndex
+        val currentIdx = chapterIndexForPage(chapters, state.currentPage)
 
         if (chapters == null || currentIdx < 0) {
-            // 整本模式
+            // 整本（无分卷标记）模式
             val isAtEnd = state.currentPage >= state.totalPages - 1
             return Pair(isAtEnd, isAtEnd)
         }
 
-        // 分卷模式：检查是否在当前卷末尾
-        val currentChapter = chapters[currentIdx]
-        val prevPages = chapters.take(currentIdx).sumOf { it.pages.size }
-        val lastPageOfChapter = prevPages + currentChapter.pages.size - 1
+        val chapterStart = chapters.take(currentIdx).sumOf { it.pages.size }
+        val lastPageOfChapter = chapterStart + chapters[currentIdx].pages.size - 1
         val isAtChapterEnd = state.currentPage >= lastPageOfChapter
         val isLastChapter = currentIdx >= chapters.size - 1
 
@@ -545,35 +574,35 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 获取下一卷的标题（用于对话框显示）。
+     * 获取下一卷的标题（用于卷末对话框显示），没有下一卷时返回 null。
      */
     fun getNextChapterTitle(): String? {
-        if (pageLoader.pages.isEmpty()) return null
+        val chapters = pageLoader.allChapters ?: return null
+        val currentIdx = chapterIndexForPage(chapters, _uiState.value.currentPage)
+        val nextIdx = currentIdx + 1
+        return chapters.getOrNull(nextIdx)?.title
+    }
 
-        val currentPage = _uiState.value.currentPage
-        val currentChapter = pageLoader.pages.getOrNull(currentPage)?.chapterTitle ?: ""
-
-        // 单卷模式：从 allChapters 取下一卷标题
+    /**
+     * 跳转到当前分卷内的第 [targetInChapter] 页（1 起）。
+     * 基于当前全局页码实时定位分卷，不依赖标题匹配（混合散页场景下标题可能为空或重名）。
+     * 无分卷信息时按整本页码跳转。
+     */
+    fun jumpToPageInCurrentChapter(targetInChapter: Int) {
         val chapters = pageLoader.allChapters
-        val nextIdx = pageLoader.currentChapterIndex + 1
-        if (chapters != null && nextIdx in chapters.indices) {
-            return chapters[nextIdx].title
+        val current = _uiState.value.currentPage
+        if (chapters == null) {
+            setCurrentPage((targetInChapter - 1).coerceAtLeast(0))
+            return
         }
-
-        // 整本漫画模式
-        var lastPageOfCurrentChapter = currentPage
-        while (lastPageOfCurrentChapter + 1 < pageLoader.pages.size &&
-               pageLoader.pages[lastPageOfCurrentChapter + 1].chapterTitle == currentChapter) {
-            lastPageOfCurrentChapter++
+        val idx = chapterIndexForPage(chapters, current)
+        if (idx < 0) {
+            setCurrentPage((targetInChapter - 1).coerceAtLeast(0))
+            return
         }
-
-        for (i in (lastPageOfCurrentChapter + 1) until pageLoader.pages.size) {
-            if (pageLoader.pages[i].chapterTitle.isNotEmpty() && pageLoader.pages[i].chapterTitle != currentChapter) {
-                return pageLoader.pages[i].chapterTitle
-            }
-        }
-
-        return null
+        val chapterStart = chapters.take(idx).sumOf { it.pages.size }
+        val target = chapterStart + (targetInChapter - 1).coerceAtLeast(0)
+        setCurrentPage(target)
     }
 
     fun setCurrentPage(page: Int) {
@@ -582,7 +611,13 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         if (clamped != oldPage) {
             // 用户手动翻页或成功跳转后重置 TTS 空页跳过计数
             ttsController.ttsEmptySkipCount.set(0)
-            val chapter = pageLoader.pages.getOrNull(clamped)?.chapterTitle ?: ""
+            // 同步当前分卷下标，供卷末判断与上一卷/下一卷跳转使用
+            val chapterIdx = chapterIndexForPage(pageLoader.allChapters, clamped)
+            // 散页（页内 chapterTitle 为空）会被聚合进以漫画名命名的合成卷，
+            // 标题需从分卷列表解析，否则顶部卷名/卷末提示为空。
+            val chapter = pageLoader.allChapters?.getOrNull(chapterIdx)?.title
+                ?: (pageLoader.pages.getOrNull(clamped)?.chapterTitle ?: "")
+            pageLoader.setCurrentChapterIndex(chapterIdx)
             _uiState.value = _uiState.value.copy(currentPage = clamped, currentChapter = chapter)
             comicUri?.let { uri ->
                 progressSaver.cancelPendingJob()
@@ -648,7 +683,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             getPageText = { page ->
                 pageLoader.getProvider()?.getPageText(page)
             },
-            onSkipPage = { nextPage() }
+            onSkipPage = { nextPage(autoContinue = true) }
         )
     }
 
@@ -663,8 +698,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                     loadPageBitmap(page)
                 }
             },
-            jumpToNextChapter = { jumpToNextChapter() },
-            setCurrentPage = { setCurrentPage(it) },
+            advancePage = { nextPage(autoContinue = true) },
+            getChapterTitle = { getPageChapterTitle() },
             onStop = { /* autoPager 内部已处理 */ }
         )
     }
@@ -697,7 +732,6 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         // ViewModel 销毁时 viewModelScope 已取消，改用 applicationScope 在后台异步保存。
         val sessionUri = comicUri
         val currentPage = _uiState.value.currentPage
-        val currentChapter = _uiState.value.currentChapter
         // 结束阅读会话；若 releaseCache 已结算，内部原子标志保证不会重复。
         statsTracker.endSession(sessionUri)
         MangaReaderApplication.applicationScope.launch(Dispatchers.IO) {
@@ -705,8 +739,8 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 withTimeoutOrNull(EXIT_SAVE_TIMEOUT_MS) {
                     if (sessionUri != null && currentPage >= 0) {
-                        val progressChapter = if (pageLoader.allChapters != null) currentChapter else ""
-                        settingsRepository.saveProgress(sessionUri, progressChapter, currentPage)
+                        // 兜底只写整本整体进度（全局页码）；分卷级进度由 ProgressSaver 常规保存，
+                        // 这里无法可靠换算卷内页码，写全局值反而会污染分卷键。
                         val (overallProgress, overallTotal) = pageLoader.computeOverallProgress(currentPage)
                         settingsRepository.saveProgress(sessionUri, overallProgress)
                         settingsRepository.saveTotalPages(sessionUri, overallTotal)

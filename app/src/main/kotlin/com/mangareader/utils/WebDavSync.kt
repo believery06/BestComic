@@ -160,7 +160,10 @@ object WebDavSync {
                 progressTimes = progressTimes
             )
             val content = json.encodeToString(data)
-            if (content.length > MAX_SYNC_DATA_BYTES) {
+            // 限制必须按 UTF-8 字节数判断：content.length 是 UTF-16 字符数，
+            // 中文等多字节字符会让实际体积接近字符数的 3 倍，字符数判断形同虚设。
+            val contentBytes = content.toByteArray(Charsets.UTF_8)
+            if (contentBytes.size > MAX_SYNC_DATA_BYTES) {
                 return@withContext Result.failure(
                     Exception("本地同步数据超过 ${MAX_SYNC_DATA_BYTES / 1024 / 1024}MB 上限，请清理历史记录后重试")
                 )
@@ -171,7 +174,7 @@ object WebDavSync {
             conn.setRequestProperty("Content-Type", "application/json")
 
             conn.outputStream.use { os ->
-                ByteArrayInputStream(content.toByteArray(Charsets.UTF_8)).use { input ->
+                ByteArrayInputStream(contentBytes).use { input ->
                     input.copyTo(os)
                 }
             }

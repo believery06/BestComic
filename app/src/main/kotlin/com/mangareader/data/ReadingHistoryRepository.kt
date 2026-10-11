@@ -71,7 +71,13 @@ class ReadingHistoryRepository(private val context: Context) {
     }.flowOn(Dispatchers.IO)
 
     suspend fun markAsRead(uri: Uri, totalPages: Int) {
-        ReadingProgressRepository.getInstance(context).saveProgress(uri, (totalPages - 1).coerceAtLeast(0))
+        val progressRepo = ReadingProgressRepository.getInstance(context)
+        // 必须同时写 total：此前只写进度键，对从未打开过的漫画（total 缺失），
+        // 书架仍判定为未读，批量标记已读完全无效。
+        progressRepo.saveTotalPages(uri, totalPages)
+        // 写到末页或越过末页一位：保证单页漫画（末页下标 0）也能满足已读判定，
+        // 阅读器恢复进度时会自行 coerce 回合法范围。
+        progressRepo.saveProgress(uri, totalPages.coerceAtLeast(1))
     }
 
     suspend fun markAsUnread(uri: Uri) {

@@ -42,7 +42,7 @@ import com.mangareader.data.ComicType
 @Composable
 fun ChapterBrowserScreen(
     comicUri: Uri,
-    onOpenReader: (Uri) -> Unit,
+    onOpenReader: (Int) -> Unit,
     onBack: () -> Unit,
     viewModel: ChapterBrowserViewModel = viewModel()
 ) {
@@ -54,7 +54,10 @@ fun ChapterBrowserScreen(
         val uriString = comicUri.toString()
         val title = comicUri.lastPathSegment ?: context.getString(R.string.external_intent_default_title)
         val type = com.mangareader.parser.ParserFactory.detectType(title)
-        val isDirectory = type == ComicType.FOLDER || type == ComicType.COMIC_BOOK
+        // 无扩展名的 SAF tree URI 会被判为 UNKNOWN，但它实际是目录，按目录漫画处理。
+        val isDirectory = type == ComicType.FOLDER ||
+                type == ComicType.COMIC_BOOK ||
+                type == ComicType.UNKNOWN
         ComicEntry(
             uri = comicUri,
             title = title,
@@ -147,7 +150,8 @@ fun ChapterBrowserScreen(
                     if (!isSearching && uiState.continueAvailable) {
                         TextButton(
                             onClick = {
-                                onOpenReader(comicUri)
+                                // -1 表示续读：阅读器按已保存进度恢复页码
+                                onOpenReader(-1)
                             }
                         ) {
                             Text(stringResource(R.string.chapter_browser_continue_reading))
@@ -227,7 +231,8 @@ fun ChapterBrowserScreen(
                                 chapter = chapter,
                                 viewModel = viewModel,
                                 onClick = {
-                                    onOpenReader(chapter.uri)
+                                    // 使用未筛选分卷列表中的下标，阅读器按同序分组解析
+                                    onOpenReader(uiState.chapters.indexOf(chapter).coerceAtLeast(0))
                                 }
                             )
                         }
@@ -244,9 +249,11 @@ private fun ChapterCard(
     viewModel: ChapterBrowserViewModel,
     onClick: () -> Unit
 ) {
-    // 使用章节 URI 作为键，避免不同章节标题相同时共享缩略图状态。
-    var thumb by remember(chapter.uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(chapter.uri) {
+    // 所有分卷共享同一个漫画 URI，必须以分卷内容（标题+首页名）作为 key，
+    // 否则搜索筛选导致位置复用时会残留上一个分卷的缩略图。
+    val chapterKey = "${chapter.title}#${chapter.pages.firstOrNull()?.name}#${chapter.pages.size}"
+    var thumb by remember(chapterKey) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(chapterKey) {
         chapter.pages.firstOrNull()?.let { firstPage ->
             thumb = viewModel.loadThumbnail(firstPage)
         }

@@ -227,21 +227,17 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch(Dispatchers.IO) {
             var success = false
             try {
-                success = when (uri.scheme) {
-                    "file" -> {
-                        // 使用 FileManager 规范化路径后再重命名，避免符号链接/.. 导致目标错误
-                        val file = FileManager.toSafeFile(uri) ?: return@launch
-                        val parent = file.parentFile ?: return@launch
-                        file.renameTo(File(parent, newName))
-                    }
-                    "content" -> {
-                        val ctx = getApplication<Application>()
-                        DocumentsContract.renameDocument(ctx.contentResolver, uri, newName) != null
-                    }
-                    else -> false
+                // 统一走 FileManager.rename：内部会净化文件名，拦截 ../、路径分隔符等，
+                // 避免文件被移出目录或静默覆盖；同时返回重命名后的新 URI。
+                val newUri = FileManager.rename(getApplication(), uri, newName)
+                if (newUri != null) {
+                    // 所有用户数据均以 URI 为键，重命名后必须整体迁移，
+                    // 否则进度/收藏/分类/书签/短评/历史会全部丢失。
+                    settingsRepository.migrateComicUriData(uri, newUri)
+                    success = true
+                    FileListHelper.clearCache()
+                    _uiState.value.currentUri?.let { loadBookshelf(it) }
                 }
-                FileListHelper.clearCache()
-                _uiState.value.currentUri?.let { loadBookshelf(it) }
             } catch (e: CancellationException) {
                 success = false
                 throw e
@@ -249,7 +245,7 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
                 Log.e(TAG, "重命名漫画失败", e)
                 success = false
             } finally {
-                withContext(NonCancellable) {
+                withContext(NonCancellable + Dispatchers.Main) {
                     callback(success)
                 }
             }
@@ -291,9 +287,19 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch(Dispatchers.IO) {
             val list = settingsRepository.getBookshelfUris().first().toMutableList()
             if (index !in list.indices) return@launch
+            // 以「当前选中书架」为基准计算删除后的下标：
+            // 删除当前项之前的书架 → 当前项下移一位；之后的书架 → 下标不变。
+            // 旧实现恒跳转到被删除位置，删除非当前书架时会切错书架。
+            val current = settingsRepository.getCurrentBookshelfIndex().first()
+                .coerceIn(0, (list.size - 1).coerceAtLeast(0))
             list.removeAt(index)
             settingsRepository.saveBookshelfUris(list)
-            val newIndex = if (list.isEmpty()) -1 else index.coerceIn(0, list.size - 1)
+            val newIndex = when {
+                list.isEmpty() -> -1
+                index < current -> current - 1
+                index > current -> current
+                else -> index.coerceIn(0, list.size - 1)
+            }.coerceIn(-1, list.size - 1)
             settingsRepository.saveCurrentBookshelfIndex(newIndex)
             if (newIndex >= 0) {
                 runCatching { Uri.parse(list[newIndex]) }.getOrNull()?.let { loadBookshelf(it, resetStack = true) }
@@ -363,11 +369,11 @@ class BookshelfViewModel(application: Application) : AndroidViewModel(applicatio
 
             withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(newComicUris = newUris) }
 
-            // 更新扫描状态：合并已知文件并刷新时间戳
-            val mergedKnown = previous.knownFiles + currentFiles
+            // 更新扫描状态：以本次实际扫描到的文件为基底，避免已删除文件的 URI
+            // 永久残留在 knownFiles 中导致该条目随使用时间无限膨胀。
             settingsRepository.saveBookshelfScanState(
                 rootUri.toString(),
-                BookshelfScanState(lastScanAt = now, knownFiles = mergedKnown)
+                BookshelfScanState(lastScanAt = now, knownFiles = currentFiles)
             )
         } catch (e: CancellationException) {
             throw e

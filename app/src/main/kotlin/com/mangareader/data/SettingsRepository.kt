@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CancellationException
@@ -592,6 +593,58 @@ class SettingsRepository(private val context: Context) {
         readingProgressRepository.saveProgressTimesBatch(times)
 
     fun getAllProgress(): Flow<Map<String, Pair<Int, Int>>> = readingProgressRepository.getAllProgress()
+
+    /**
+     * 漫画文件/目录重命名后，把所有以旧 URI 为键或在 JSON 串中包含旧 URI 的
+     * 用户数据（进度、进度时间、总页数、收藏、分类、书签、短评、历史、tracked 列表等）
+     * 统一迁移到新 URI，避免重命名后漫画变回未读、收藏/书签/分类全部丢失。
+     * 在同一个 DataStore 事务内完成，键重命名与字符串替换两种形态都覆盖。
+     */
+    suspend fun migrateComicUriData(oldUri: Uri, newUri: Uri) = withContext(Dispatchers.IO) {
+        val old = oldUri.toString()
+        val new = newUri.toString()
+        if (old.isBlank() || old == new) return@withContext
+        runCatching {
+            context.userDataStore.edit { prefs ->
+                val entries = prefs.asMap().entries.toList()
+                for ((key, value) in entries) {
+                    if (key.name.contains(old)) {
+                        // 键名本身含 URI（progress_/progress_time_/total_ 等标量键）：改名迁移
+                        val newName = key.name.replace(old, new)
+                        when (value) {
+                            is Int -> prefs[intPreferencesKey(newName)] = value
+                            is Long -> prefs[longPreferencesKey(newName)] = value
+                            is Boolean -> prefs[booleanPreferencesKey(newName)] = value
+                            is Float -> prefs[floatPreferencesKey(newName)] = value
+                            is String -> prefs[stringPreferencesKey(newName)] = value.replace(old, new)
+                            is Set<*> -> {
+                                @Suppress("UNCHECKED_CAST")
+                                prefs[stringSetPreferencesKey(newName)] =
+                                        (value as Set<String>).mapTo(LinkedHashSet()) { it.replace(old, new) }
+                            }
+                        }
+                        prefs.remove(key)
+                    } else when (value) {
+                        // JSON 字符串中的 URI（收藏列表/分类映射/书签/短评/历史/tracked_uris）
+                        is String -> if (value.contains(old)) {
+                            @Suppress("UNCHECKED_CAST")
+                            prefs[key as Preferences.Key<String>] = value.replace(old, new)
+                        }
+                        is Set<*> -> {
+                            @Suppress("UNCHECKED_CAST")
+                            val oldSet = value as Set<String>
+                            if (oldSet.any { it.contains(old) }) {
+                                @Suppress("UNCHECKED_CAST")
+                                prefs[key as Preferences.Key<Set<String>>] =
+                                        oldSet.mapTo(LinkedHashSet()) { it.replace(old, new) }
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+        }.onFailure { Log.w("SettingsRepository", "迁移漫画关联数据失败: $old -> $new", it) }
+    }
 
     // ==================== 本地备份与恢复 ====================
 

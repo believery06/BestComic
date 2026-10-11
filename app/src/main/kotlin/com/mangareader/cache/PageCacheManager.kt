@@ -577,12 +577,6 @@ class PageCacheManager(context: Context) {
         return size
     }
 
-    private fun isKeyInDiskCache(key: String): Boolean {
-        synchronized(diskKeyIndex) {
-            return diskKeyIndex.contains(key)
-        }
-    }
-
     private fun addToDiskKeyIndex(key: String) {
         synchronized(diskKeyIndex) {
             diskKeyIndex.add(key)
@@ -711,9 +705,13 @@ class PageCacheManager(context: Context) {
 
     private fun loadBytesFromDisk(provider: ComicProvider, index: Int): ByteArray? {
         val key = pageKey(provider.cacheId, index)
-        if (!isKeyInDiskCache(key)) return null
+        // 不再以纯内存的 diskKeyIndex 作为读盘门槛：进程重启后内存索引丢失，
+        // 会导致上一会话落盘的页面缓存永远无法命中。直接信任磁盘文件，
+        // 命中后把 key 补回内存索引，供按漫画清理/容量统计在本会话内继续工作。
         return try {
-            pageDiskCache.getStream(key)?.use { it.readBytes() }
+            pageDiskCache.getStream(key)?.use { it.readBytes() }?.also {
+                addToDiskKeyIndex(key)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

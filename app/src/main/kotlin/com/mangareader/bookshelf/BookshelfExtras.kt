@@ -89,7 +89,9 @@ fun ReadingStatsDialog(
     val context = LocalContext.current
     val started = progressMap.count { it.value.first > 0 }
     val finished = progressMap.count { it.value.second > 0 && it.value.first >= it.value.second - 1 }
-    val totalPages = progressMap.values.sumOf { it.first.coerceAtLeast(0) } + stats.totalPagesRead
+    // 总翻页只取累计统计：旧实现再加上各漫画当前页码之和，同一批页被计算两遍，
+    // 导致万页成就提前解锁、数值虚高。
+    val totalPages = stats.totalPagesRead.coerceAtLeast(0)
     val reviewed = extras.count { it.value.review.isNotBlank() }
     val unlocked = Achievement.entries.filter { achievement ->
         when (achievement) {

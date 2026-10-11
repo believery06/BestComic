@@ -147,8 +147,8 @@ fun MangaReaderApp(startUri: Uri? = null) {
                 if (comicUri != null) {
                     ChapterBrowserScreen(
                         comicUri = comicUri,
-                        onOpenReader = { chapterUri ->
-                            navController.navigate(Screen.Reader.createRoute(comicUri, chapterUri))
+                        onOpenReader = { chapterIndex ->
+                            navController.navigate(Screen.Reader.createRoute(comicUri, chapterIndex))
                         },
                         onBack = { navController.popBackStack() }
                     )
@@ -165,17 +165,16 @@ fun MangaReaderApp(startUri: Uri? = null) {
                 route = Screen.Reader.route,
                 arguments = listOf(
                     navArgument("comicUri") { type = NavType.StringType },
-                    navArgument("chapterUri") { type = NavType.StringType; defaultValue = "" }
+                    navArgument("chapterIndex") { type = NavType.IntType; defaultValue = -1 }
                 )
             ) { backStackEntry ->
                 val comicUriString = backStackEntry.arguments?.getString("comicUri")?.let { Uri.decode(it) }
-                val chapterUriString = backStackEntry.arguments?.getString("chapterUri")?.let { Uri.decode(it) }
+                val chapterIndex = backStackEntry.arguments?.getInt("chapterIndex", -1) ?: -1
                 val comicUri = comicUriString?.let { Uri.parse(it) }
-                val chapterUri = if (!chapterUriString.isNullOrEmpty()) Uri.parse(chapterUriString) else null
                 if (comicUri != null) {
                     ReaderScreen(
                         comicUri = comicUri,
-                        chapterUri = chapterUri,
+                        chapterIndex = chapterIndex,
                         onBack = {
                             if (!navController.popBackStack()) {
                                 navController.navigate(Screen.Bookshelf.route) {

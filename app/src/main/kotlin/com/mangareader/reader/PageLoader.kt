@@ -99,16 +99,15 @@ class PageLoader(
         provider = null
     }
 
-    fun computeOverallProgress(pageInChapter: Int): Pair<Int, Int> {
-        val chapters = allChapters
-        val idx = currentChapterIndex
-        return if (chapters != null && idx >= 0) {
-            val prevPages = chapters.take(idx).sumOf { it.pages.size }
-            val totalPages = chapters.sumOf { it.pages.size }
-            Pair(prevPages + pageInChapter, totalPages)
-        } else {
-            Pair(pageInChapter, pages.size)
-        }
+    /**
+     * 计算整本阅读进度。
+     * 新模型下所有分卷共享同一条全局页面列表，[page] 始终是全局页码，
+     * 不再需要按 currentChapterIndex 累加（旧实现会把分卷前页数重复计算一遍）。
+     */
+    fun computeOverallProgress(page: Int): Pair<Int, Int> {
+        val totalPages = allChapters?.sumOf { it.pages.size } ?: pages.size
+        val safeTotal = totalPages.coerceAtLeast(0)
+        return Pair(page.coerceIn(0, safeTotal), safeTotal)
     }
 
     fun setCurrentChapterIndex(index: Int) {

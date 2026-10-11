@@ -1728,15 +1728,7 @@ internal fun MenuOverlay(
             confirmButton = {
                 TextButton(onClick = {
                     val targetInChapter = pageInput.toIntOrNull()?.coerceIn(1, chapterPageCount.coerceAtLeast(1)) ?: 1
-                    val chapters = viewModel.getChapterList()
-                    val currentChapterTitle = state.currentChapter
-                    val chapterInfo = chapters.find { it.first == currentChapterTitle }
-                    if (chapterInfo != null) {
-                        val globalPage = chapterInfo.second + targetInChapter - 1
-                        viewModel.setCurrentPage(globalPage)
-                    } else {
-                        viewModel.setCurrentPage(targetInChapter - 1)
-                    }
+                    viewModel.jumpToPageInCurrentChapter(targetInChapter)
                     showJumpDialog = false
                 }) { Text(stringResource(R.string.reader_jump_label)) }
             },

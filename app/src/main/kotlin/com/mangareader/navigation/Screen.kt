@@ -16,9 +16,13 @@ sealed class Screen(val route: String) {
         fun createRoute(comicUri: Uri): String =
             "chapter_browser/${Uri.encode(comicUri.toString())}"
     }
-    data object Reader : Screen("reader/{comicUri}?chapterUri={chapterUri}") {
-        fun createRoute(comicUri: Uri, chapterUri: Uri? = null): String =
-            "reader/${Uri.encode(comicUri.toString())}?chapterUri=${Uri.encode(chapterUri?.toString() ?: "")}"
+    data object Reader : Screen("reader/{comicUri}?chapterIndex={chapterIndex}") {
+        /**
+         * @param chapterIndex 指定打开的分卷在分卷列表中的下标；-1 表示整本/续读模式，
+         * 由阅读器根据已保存的阅读进度恢复页码。
+         */
+        fun createRoute(comicUri: Uri, chapterIndex: Int = -1): String =
+            "reader/${Uri.encode(comicUri.toString())}?chapterIndex=$chapterIndex"
     }
     data object Settings : Screen("settings")
     data object History : Screen("history")
