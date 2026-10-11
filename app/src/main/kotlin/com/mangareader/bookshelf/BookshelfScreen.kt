@@ -291,9 +291,9 @@ fun BookshelfScreen(
                             selectedUris + uriString
                         }
                         if (selectedUris.isEmpty()) selectionMode = false
-                    } else if (comic.isDirectory) {
-                        viewModel.openDirectory(comic.uri)
                     } else {
+                        // 目录类漫画（分卷合集）直接进入分卷浏览，不再多压一层冗余的文件夹列表，
+                        // 与项目硬约束「点击漫画先进分卷浏览」及 continueReading 行为保持一致。
                         viewModel.markComicSeen(uriString)
                         onOpenComic(comic)
                     }

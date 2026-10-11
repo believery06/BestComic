@@ -1765,7 +1765,7 @@ internal fun MenuOverlay(
                             ) {
                                 Text(
                                     text = stringResource(R.string.reader_chapter_page_count, title, endIdx - startIdx + 1),
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else Color.White,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }

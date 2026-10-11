@@ -3405,4 +3405,24 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 81，`versionName` 1.0.81。
 - 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
+### 13.84 分卷浏览跳转链路修复 (2026-10-11)
+
+#### 修复内容
+1. **点击分卷进入冗余的二级列表、需多次点击才能阅读**
+   - 根因：书架点击事件对目录类漫画走 `viewModel.openDirectory(comic.uri)`，即在书架内再压入一层文件夹列表；而项目硬约束（见 4.4 及 `openComic`）要求「点击漫画先进分卷浏览」。于是形成 书架 → 文件夹列表 → 分卷浏览 → 阅读器 的多级冗余路径。
+   - 修复：`BookshelfScreen` 点击目录类漫画时改为 `onOpenComic(comic)`，直接进入分卷浏览，与 `continueReading` 行为统一。
+
+2. **无法跳转到同一漫画的下一卷**
+   - 根因：上一条导致用户实际是按「单个文件」打开每一卷，阅读器内 `allChapters` 只有一卷，`jumpToNextChapter()` 自然无下一卷可跳。
+   - 修复：目录漫画经分卷浏览打开后，阅读器解析整本漫画（`ComicBookParser`），全部卷进入同一页面列表，卷末对话框与阅读器内「分卷列表」均可正常跨卷跳转。
+
+3. **分卷列表无法正常显示**
+   - 根因：阅读器内「分卷列表」中非当前卷的标题硬编码为 `Color.White`，浅色主题下与对话框底色同色导致不可见。
+   - 修复：改用 `MaterialTheme.colorScheme.onSurface`。
+
+#### 相关文件
+- 修改：`bookshelf/BookshelfScreen.kt`、`reader/ReaderScreenComponents.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 82，`versionName` 1.0.82。
+- 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
 *文档更新时间：2026-10-11*
