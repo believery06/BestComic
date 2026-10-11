@@ -3383,4 +3383,26 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 80，`versionName` 1.0.80。
 - 测试：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
-*文档更新时间：2026-07-28*
+### 13.83 关键缺陷修复：漫画识别 / 缓存膨胀 / 退出白屏 (2026-10-11)
+
+#### 修复内容
+1. **漫画无法识别（双解码破坏 SAF URI）**
+   - 现象：任何格式漫画点击后都提示无内容 / 无法识别。
+   - 根因：`navArgument(...) { type = NavType.StringType }` 的路径参数已由 AndroidX Navigation 自动 URLDecode 一次；`MangaReaderApp.kt` 读取后又调用 `Uri.decode(...)` 二次解码，把 SAF documentId 中的 `%2F`/`%3A` 还原成 `/`、`:`，导致 `content://.../document/primary%3AComics%2FChapter1.cbz` 这类文档 URI 被截断破坏。
+   - 修复：移除 ChapterBrowser / Reader 两处多余的 `Uri.decode`，仅保留一次 `Uri.parse`。
+
+2. **缓存大量占用**
+   - 分享卡片写入 `cacheDir` 根目录，而 `CacheCleaner.cleanShareCards` 只扫描 `cacheDir/share_cards/`，导致永不清理；改为写入 `share_cards/` 子目录，并让清理逻辑兼容扫描根目录的历史遗留文件。
+   - `CoverExtractor.extractLocalImageThumbnail` 写 `thumb_local_*.png` 后从不调用 `cleanupOldCovers`，FOLDER 漫画缩略图无界增长；补齐按 `MAX_COVER_CACHE_FILES` 上限清理。
+   - `CacheCleaner` 临时文件前缀补齐 `mobi_temp_` / `mobi_thumb_`。
+
+3. **退出白屏**
+   - 根因：`MainActivity` 的根 `Surface` 位于 `MangaReaderTheme` 之外，回退到 Material3 默认浅色 colorScheme（白）作为底层背景。
+   - 修复：移除该未主题化 Surface，改由 `MangaReaderApp` 在 `MangaReaderTheme` 内使用主题化 `Surface(color = colorScheme.background)` 提供根背景；帮助 / 崩溃弹窗一并移入主题作用域。
+
+#### 相关文件
+- 修改：`MangaReaderApp.kt`、`MainActivity.kt`、`reader/ReaderViewModel.kt`、`utils/CoverExtractor.kt`、`cache/CacheCleaner.kt`、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 81，`versionName` 1.0.81。
+- 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
+
+*文档更新时间：2026-10-11*

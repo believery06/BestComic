@@ -36,9 +36,17 @@ object CacheCleaner {
     /** 清理超过 [MAX_CACHE_AGE_MS] 的分享卡片临时 PNG。 */
     private fun cleanShareCards(cacheDir: File) {
         val now = System.currentTimeMillis()
-        File(cacheDir, "share_cards").listFiles()?.filter {
-            it.isFile && it.name.startsWith("share_card_") && it.name.endsWith(".png")
-        }?.forEach {
+        val isShareCard = { f: File ->
+            f.isFile && f.name.startsWith("share_card_") && f.name.endsWith(".png")
+        }
+        // 现行写入位置：cacheDir/share_cards/
+        File(cacheDir, "share_cards").listFiles()?.filter(isShareCard)?.forEach {
+            if (now - it.lastModified() > MAX_CACHE_AGE_MS) {
+                runCatching { it.delete() }
+            }
+        }
+        // 兼容历史版本：旧版曾把分享卡片直接写在 cacheDir 根目录，导致永不清理。
+        cacheDir.listFiles()?.filter(isShareCard)?.forEach {
             if (now - it.lastModified() > MAX_CACHE_AGE_MS) {
                 runCatching { it.delete() }
             }
@@ -67,11 +75,12 @@ object CacheCleaner {
         // 旧版 CBT/CB7 整理解压遗留目录；新版 CBT 使用 cbt_temp_*.cbt 临时归档文件。
         val tempDirPrefixes = listOf("cbt_", "cb7_", "cbz_", "cbr_")
         // pdf_ 由 PdfRenderer.createTempFile 生成；cbr_temp_/cbt_temp_ 为 content:// 源回退副本；
-        // tmp_/temp_ 为通用临时文件；cbz_/cbr_/cbt_/cb7_ 为旧版解析器可能遗留的压缩包副本。
+        // tmp_/temp_ 为通用临时文件；cbz_/cbr_/cbt_/cb7_ 为旧版解析器可能遗留的压缩包副本；
+        // mobi_temp_/mobi_thumb_ 为 MOBI 解析与封面提取的 content:// 源回退副本。
         val tempFilePrefixes = listOf(
             "zip_prov_", "epub_", "pdf_", "temp_", "tmp_",
             "cbr_temp_", "cbt_temp_", "cbz_", "cbr_", "cbt_", "cb7_",
-            "cbt_index_"
+            "cbt_index_", "mobi_temp_", "mobi_thumb_"
         )
 
         cacheDir.listFiles()?.forEach { child ->

@@ -9,10 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import java.lang.ref.WeakReference
 
@@ -58,9 +55,9 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            Surface(modifier = Modifier.fillMaxSize()) {
-                MangaReaderApp(startUri = startUriState.value)
-            }
+            // 根背景交由 MangaReaderApp 内部的主题化 Surface 提供，
+            // 此处不再包一层未主题化的 Material3 Surface（其默认浅色会导致退出白屏）。
+            MangaReaderApp(startUri = startUriState.value)
         }
     }
 

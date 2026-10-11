@@ -1273,7 +1273,10 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             val pageLabel = "Page ${pageIndex + 1}"
             val card = ImageUtils.createShareCard(bitmap, entry.title, pageLabel, getApplication<Application>().getString(R.string.app_name))
             if (card != null) {
-                val file = java.io.File(getApplication<Application>().cacheDir, "share_card_${System.currentTimeMillis()}.png")
+                // 写入 cacheDir/share_cards/ 子目录，与 CacheCleaner.cleanShareCards 及
+                // 缓存管理页的统计/清理路径保持一致；写入 cacheDir 根目录会导致永不清理。
+                val dir = java.io.File(getApplication<Application>().cacheDir, "share_cards").apply { mkdirs() }
+                val file = java.io.File(dir, "share_card_${System.currentTimeMillis()}.png")
                 FileOutputStream(file).use { out ->
                     card.compress(Bitmap.CompressFormat.PNG, 100, out)
                 }

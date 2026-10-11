@@ -1,8 +1,12 @@
 package com.mangareader
 
 import android.net.Uri
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
 import com.mangareader.R
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -121,7 +125,13 @@ fun MangaReaderApp(startUri: Uri? = null) {
             customSeedColor = appTheme.customSeedColor,
             themeAutoMode = appTheme.themeAutoMode
         ) {
-            NavHost(navController = navController, startDestination = Screen.Bookshelf.route) {
+            // 主题化根容器：统一应用深色/主题底色，避免此前位于主题之外、
+            // 回退到 Material3 默认浅色（白）Surface 造成的退出白屏。
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.background
+            ) {
+                NavHost(navController = navController, startDestination = Screen.Bookshelf.route) {
             composable(Screen.Bookshelf.route) {
                 BookshelfScreen(
                     onOpenComic = openComic,
@@ -142,7 +152,10 @@ fun MangaReaderApp(startUri: Uri? = null) {
                 route = Screen.ChapterBrowser.route,
                 arguments = listOf(navArgument("comicUri") { type = NavType.StringType })
             ) { backStackEntry ->
-                val comicUriString = backStackEntry.arguments?.getString("comicUri")?.let { Uri.decode(it) }
+                // NavType.StringType 路径参数已由 Navigation 自动 URLDecode 一次，
+                // 不能再手动 Uri.decode，否则会把 SAF documentId 里的 %2F/%3A 二次解码，
+                // 导致 content:// 文档 URI 被破坏、任何格式漫画都无法识别。
+                val comicUriString = backStackEntry.arguments?.getString("comicUri")
                 val comicUri = comicUriString?.let { Uri.parse(it) }
                 if (comicUri != null) {
                     ChapterBrowserScreen(
@@ -168,7 +181,8 @@ fun MangaReaderApp(startUri: Uri? = null) {
                     navArgument("chapterIndex") { type = NavType.IntType; defaultValue = -1 }
                 )
             ) { backStackEntry ->
-                val comicUriString = backStackEntry.arguments?.getString("comicUri")?.let { Uri.decode(it) }
+                // 同上：路径参数已由 Navigation 自动解码，禁止二次 Uri.decode。
+                val comicUriString = backStackEntry.arguments?.getString("comicUri")
                 val chapterIndex = backStackEntry.arguments?.getInt("chapterIndex", -1) ?: -1
                 val comicUri = comicUriString?.let { Uri.parse(it) }
                 if (comicUri != null) {
@@ -225,29 +239,30 @@ fun MangaReaderApp(startUri: Uri? = null) {
                     onBack = { navController.popBackStack() }
                 )
             }
-        }
-        }
-    }
-
-    if (showHelpManually) {
-        com.mangareader.onboarding.ManualHelpDialog(
-            onClose = { showHelpManually = false },
-            onResetHelpPreference = {
-                scope.launch {
-                    settingsRepository.setHelpDontShow(false)
                 }
-                showHelpManually = false
             }
-        )
-    }
 
-    if (pendingCrashLogs.isNotEmpty()) {
-        CrashLogDialog(
-            logs = pendingCrashLogs,
-            onDismiss = {
-                CrashHandler.clearCrashLogs()
-                pendingCrashLogs = emptyList()
+            if (showHelpManually) {
+                com.mangareader.onboarding.ManualHelpDialog(
+                    onClose = { showHelpManually = false },
+                    onResetHelpPreference = {
+                        scope.launch {
+                            settingsRepository.setHelpDontShow(false)
+                        }
+                        showHelpManually = false
+                    }
+                )
             }
-        )
+
+            if (pendingCrashLogs.isNotEmpty()) {
+                CrashLogDialog(
+                    logs = pendingCrashLogs,
+                    onDismiss = {
+                        CrashHandler.clearCrashLogs()
+                        pendingCrashLogs = emptyList()
+                    }
+                )
+            }
+        }
     }
 }

@@ -637,7 +637,11 @@ object CoverExtractor {
             }
             thumb.recycle()
 
-            if (cacheFile.exists()) Uri.fromFile(cacheFile) else null
+            if (cacheFile.exists()) {
+                // 与 extractCover 一致地按数量上限清理，避免 FOLDER 漫画的本地缩略图无界增长。
+                cleanupOldCovers(context)
+                Uri.fromFile(cacheFile)
+            } else null
         } catch (e: OutOfMemoryError) {
             Log.e(TAG, "extractLocalImageThumbnail OOM: $uri", e)
             null
