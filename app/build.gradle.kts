@@ -10,16 +10,19 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.mangareader"
+        applicationId = "com.bestcomic"
         minSdk = 26
         targetSdk = 34
-        versionCode = 85
-        versionName = "1.0.85"
+        versionCode = 86
+        versionName = "1.0.86"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
+            // 使用 debug 签名证书签署 release 包，便于通过 GitHub Release 直接分发安装。
+            // 注意：debug 证书仅供个人分发/自用，不适合上架应用商店。
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
