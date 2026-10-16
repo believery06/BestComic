@@ -3492,4 +3492,24 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 版本：`versionCode` 85，`versionName` 1.0.85。
 - 验证：`.\gradlew.bat assembleDebug testDebugUnitTest lintDebug` 全部通过。
 
-*文档更新时间：2026-10-11*
+### 13.88 阅读显示位图回收崩溃与手机布局菜单无法关闭修复 (2026-10-16)
+
+#### 问题一：翻页/退出阅读时崩溃 `Canvas: trying to use a recycled bitmap`
+1. **现象**：阅读中翻页、切换缩略图、关闭放大镜或退出阅读器时，偶发崩溃，堆栈落在 `BaseRecordingCanvas.drawBitmap`，异常信息为 `java.lang.RuntimeException: Canvas: trying to use a recycled bitmap`。
+2. **根因**：`Bitmap.asImageBitmap()` 只包装底层 `Bitmap`、不复制像素数据，因此交给 Compose `Image` 绘制的位图仍与缓存/状态共享同一块像素内存。此前在 `DisposableEffect.onDispose` / `LaunchedEffect` 重启时对其调用 `recycle()`，而 RenderThread 可能仍在回放上一帧的显示列表（display list），访问已释放的像素内存，形成 use-after-free。此外 `minSdk 26` 起位图像素数据已位于 Java 堆、由 GC 管理，对仍参与绘制的位图手动 `recycle()` 既无必要，也属官方不建议的做法。
+3. **修复**：移除所有「直接交给 Compose `Image` 绘制」的位图上的手动 `recycle()`（共 11 处显示路径：`PageImage`（LaunchedEffect + DisposableEffect）、`ThumbnailStripItem`、`ThumbnailItem`、书签缩略图、`PageScrubberWithThumbnail` 预览、放大镜 4 处、`PanelViewer` 4 处、`ChapterBrowserScreen.ChapterCard`），仅保留解码池（`BitmapPool`）、缓存（`PageCacheManager`、`processedBitmapCache`）、图像处理层（`ImageUtils`、`PanelDetector`、`CoverExtractor`）中的合法回收。组件离开组合后 `remember` 状态被丢弃，位图不可达即交由 GC 回收。
+   - 同时清理因移除回收而失效的 `magnifierBitmap` / `magnifierBitmapOwned` 与放大镜 `LaunchedEffect` 中的 `owned` 所有权追踪状态。
+   - **注意**：`ReaderViewModel.processedBitmapCache` 的 `entryRemoved` 回收仍然保留——它回收的是缓存自己持有的那份位图，而 `loadPageBitmap` / `getCachedProcessedBitmap` 均通过 `createBitmapCopySafe` 返回独立副本给 UI，故缓存淘汰不会误伤正在绘制的位图。
+
+#### 问题二：手机布局下点击屏幕中部弹出菜单后无法关闭，也无法继续点击翻页
+1. **现象**：手机布局下点屏幕中部弹出操作栏后，再点中部既关不掉菜单、也无法继续阅读，只能等 5 秒无操作超时自动隐藏；表现为「菜单弹出来后返回不了」。
+2. **根因**：手机布局的菜单全屏遮罩写法为 `.pointerInput(Unit) { detectTapGestures { } }`（空实现）。Compose 的 `detectTapGestures` **即使 body 为空也会消费指针事件**，因此中部点击既没执行关闭动作，也无法透传给下层的阅读手势层；同时点击会刷新 `lastInteractionTime`，使 5 秒自动隐藏计时不断被重置。大屏（平板）分支本就写对了，手机分支漏改。
+3. **修复**：遮罩改为 `.pointerInput(Unit) { detectTapGestures { onClose() } }`（点击空白处关闭菜单），并给顶部工具栏、底部菜单两个面板各加 `.pointerInput(Unit) { detectTapGestures { } }` 吞掉自身点击，避免点击面板空白处误关菜单，行为与大屏分支对齐。
+
+#### 相关文件
+- 修改：`reader/ReaderScreenComponents.kt`（显示路径 `recycle()` 移除 + 手机布局菜单遮罩手势）、`chapters/ChapterBrowserScreen.kt`（`ChapterCard` 缩略图回收移除）、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 87，`versionName` 1.0.87。
+- 验证：`.\gradlew.bat assembleRelease testDebugUnitTest lintDebug` 全部通过。
+- 遗留：用户反馈的「左滑返回书架后闪退」尚未定位，需崩溃日志进一步排查。
+
+*文档更新时间：2026-10-16*

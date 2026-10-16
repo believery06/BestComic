@@ -258,13 +258,9 @@ private fun ChapterCard(
             thumb = viewModel.loadThumbnail(firstPage)
         }
     }
-    // 卡片离开组合或加载新缩略图时回收旧位图，避免分卷浏览页面积累大量内存。
-    DisposableEffect(thumb) {
-        val currentThumb = thumb
-        onDispose {
-            currentThumb?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-        }
-    }
+    // 卡片离开组合后 thumb 状态随之丢弃，位图不可达即由 GC 回收；
+    // 不再手动 recycle，避免 RenderThread 仍回放上一帧显示列表时
+    // 抛出 “Canvas: trying to use a recycled bitmap” 崩溃。
 
     Column(
         modifier = Modifier

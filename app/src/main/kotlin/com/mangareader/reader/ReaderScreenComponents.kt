@@ -544,23 +544,9 @@ private fun PageViewer(
     }
 
     var magnifierPos by remember { mutableStateOf<Offset?>(null) }
-    var magnifierBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var magnifierCrop by remember { mutableStateOf<Bitmap?>(null) }
-    // 标记 magnifierBitmap 是否为我们创建的独立副本（OOM 回退时可能是缓存中的 rawBmp，不可回收）。
-    var magnifierBitmapOwned by remember { mutableStateOf(false) }
-
-    // 阅读器退出时回收放大镜位图，避免内存泄漏；仅回收自己创建的副本，不碰缓存位图。
-    DisposableEffect(Unit) {
-        onDispose {
-            if (magnifierBitmapOwned) {
-                magnifierBitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-            }
-            magnifierCrop?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-            magnifierBitmap = null
-            magnifierCrop = null
-            magnifierBitmapOwned = false
-        }
-    }
+    // 阅读器退出时仅解除引用，不手动 recycle：
+    // 手动回收会与 RenderThread 回放上一帧显示列表竞态，抛出 “Canvas: trying to use a recycled bitmap” 崩溃。
 
     val triggerFlipFeedback = remember(flipVibrationEnabled, flipSoundEnabled) {
         {
@@ -638,8 +624,7 @@ private fun PageViewer(
         magnifierActive = magnifierPos != null,
         onDismissMagnifier = {
             magnifierPos = null
-            magnifierBitmap = null
-            magnifierCrop?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+            // 仅解除引用，不手动 recycle（详见上方说明）。
             magnifierCrop = null
         }
     ) {
@@ -862,28 +847,19 @@ private fun PageViewer(
                 LaunchedEffect(pos, currentPage, settingsVersion, scale, offset, containerW, containerH, densityVal) {
                     val rawBmp = loadPage(computeDisplayIndices(currentPage).firstOrNull() ?: 0)
                     // 复制一份独立副本，避免缓存回收导致放大镜位图失效；优先复用原配置降低内存峰值。
-                    // OOM 时若无法复制则回退到 rawBmp，此时不拥有该位图，不可回收。
-                    var owned = false
+                    // OOM 时若无法复制则回退到 rawBmp（该位图不归我们所有，仅引用、不回收）。
                     val bmp = rawBmp?.takeIf { !it.isRecycled }?.let {
                         try {
-                            owned = true
                             it.copy(it.config, false)
                         } catch (_: OutOfMemoryError) {
                             try {
-                                owned = true
                                 it.copy(Bitmap.Config.RGB_565, false)
                             } catch (_: OutOfMemoryError) {
-                                owned = false
                                 it
                             }
                         }
                     }
-                    magnifierBitmap?.takeIf { !it.isRecycled && it !== rawBmp && it !== bmp }?.let {
-                        runCatching { it.recycle() }
-                    }
-                    magnifierBitmap = bmp
-                    magnifierBitmapOwned = owned
-                    magnifierCrop?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+                    // 旧放大镜位图仅解除引用，不手动 recycle：会与 RenderThread 回放显示列表竞态导致崩溃。
                     magnifierCrop = null
                     if (bmp != null && !bmp.isRecycled) {
                         magnifierCrop = computeMagnifierCrop(bmp, pos, scale, offset, zoomMode, containerW, containerH, densityVal)
@@ -895,12 +871,7 @@ private fun PageViewer(
                         position = pos,
                         onDismiss = {
                             magnifierPos = null
-                            if (magnifierBitmapOwned) {
-                                magnifierBitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-                            }
-                            magnifierBitmap = null
-                            magnifierBitmapOwned = false
-                            magnifierCrop?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+                            // 仅解除引用，不手动 recycle（详见上方说明）。
                             magnifierCrop = null
                         }
                     )
@@ -1272,8 +1243,9 @@ private fun PageImage(
 
     // 加载位图并复制一份独立副本给 UI 使用，避免缓存回收导致绘制时崩溃
     LaunchedEffect(index, settingsVersion) {
-        // 回收旧副本
-        bitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
+        // 仅解除引用，不手动 recycle：minSdk 26 起位图像素由 Java 堆管理，GC 会自动回收；
+        // 手动回收会与 RenderThread 回放上一帧显示列表竞态，抛出
+        // “Canvas: trying to use a recycled bitmap” 崩溃。
         bitmap = null
         error = false
 
@@ -1306,13 +1278,8 @@ private fun PageImage(
         error = true
     }
 
-    // 组件销毁或 settingsVersion 变化时回收 UI 副本，释放内存
-    DisposableEffect(index, settingsVersion) {
-        onDispose {
-            bitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-            bitmap = null
-        }
-    }
+    // 说明：UI 显示的位图不再手动 recycle（会与渲染线程竞态导致崩溃），
+    // 组件销毁时 remember 状态被丢弃，位图自然不可达，由 GC 回收。
 
     val contentScale = when {
         fillMaxHeight -> ContentScale.FillHeight
@@ -1521,13 +1488,18 @@ internal fun MenuOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .background(scrimColor)
-                .pointerInput(Unit) { detectTapGestures { } }
+                // 点击遮罩空白处关闭菜单。此前是空实现的 detectTapGestures { }，
+                // 它会消费点击却不做任何事：中间点击既关不掉菜单、也无法透传给下层阅读手势层，
+                // 菜单只能靠 5 秒无操作超时消失，表现为“菜单弹出来后返回不了”。
+                .pointerInput(Unit) { detectTapGestures { onClose() } }
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
                     .padding(horizontal = 12.dp, vertical = 16.dp)
+                    // 面板自身吞掉点击，避免点击工具栏空白处误关菜单。
+                    .pointerInput(Unit) { detectTapGestures { } }
             ) {
                 ReaderTopBar(
                     state = state,
@@ -1540,7 +1512,9 @@ internal fun MenuOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .padding(horizontal = 12.dp, vertical = 16.dp),
+                    .padding(horizontal = 12.dp, vertical = 16.dp)
+                    // 面板自身吞掉点击，避免点击底栏空白处误关菜单。
+                    .pointerInput(Unit) { detectTapGestures { } },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 ReaderBottomMenu(
@@ -1649,12 +1623,7 @@ internal fun MenuOverlay(
                             LaunchedEffect(page) {
                                 thumb = viewModel.loadThumbnail(page)
                             }
-                            DisposableEffect(page) {
-                                onDispose {
-                                    thumb?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-                                    thumb = null
-                                }
-                            }
+                            // 仅解除引用，不手动 recycle：会与 RenderThread 回放上一帧显示列表竞态导致崩溃。
                             ListItem(
                                 headlineContent = { Text(stringResource(R.string.reader_bookmark_page, page + 1)) },
                                 supportingContent = {
@@ -2028,15 +1997,8 @@ private fun PageScrubberWithThumbnail(
     var isDragging by remember { mutableStateOf(false) }
     var previewBitmap by remember(previewPage) { mutableStateOf<Bitmap?>(null) }
 
-    // previewPage 变化时回收旧的缩略图，避免内存泄漏
-    DisposableEffect(previewPage) {
-        onDispose {
-            previewBitmap?.let { bmp ->
-                if (!bmp.isRecycled) runCatching { bmp.recycle() }
-                previewBitmap = null
-            }
-        }
-    }
+    // previewPage 变化时旧的预览位图仅解除引用，不手动 recycle：
+    // 手动回收会与 RenderThread 回放上一帧显示列表竞态，导致 “Canvas: trying to use a recycled bitmap” 崩溃。
 
     LaunchedEffect(previewPage, isDragging) {
         if (isDragging) {
@@ -2177,12 +2139,7 @@ private fun ThumbnailStripItem(
     LaunchedEffect(index) {
         bitmap = loadPage(index)
     }
-    DisposableEffect(index) {
-        onDispose {
-            bitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-            bitmap = null
-        }
-    }
+    // 不手动 recycle：会与 RenderThread 回放上一帧显示列表竞态导致崩溃，交由 GC 回收。
     Box(
         modifier = Modifier
             .padding(2.dp)
@@ -2220,12 +2177,7 @@ private fun ThumbnailItem(
     LaunchedEffect(index) {
         bitmap = loadPage(index)
     }
-    DisposableEffect(index) {
-        onDispose {
-            bitmap?.takeIf { !it.isRecycled }?.let { runCatching { it.recycle() } }
-            bitmap = null
-        }
-    }
+    // 不手动 recycle：会与 RenderThread 回放上一帧显示列表竞态导致崩溃，交由 GC 回收。
     val borderColor = if (isCurrent) MaterialTheme.colorScheme.primary else Color.Transparent
     Box(
         modifier = Modifier
@@ -2289,12 +2241,11 @@ private fun PanelViewer(
             val newBmp = loaded?.let {
                 if (it.isRecycled) null else it.copy(it.config, false)
             }
-            pageBitmap?.let { old -> if (!old.isRecycled && old !== newBmp) runCatching { old.recycle() } }
+            // 旧位图仅解除引用，不手动 recycle：会与 RenderThread 回放显示列表竞态导致崩溃。
             pageBitmap = newBmp
         }
         onDispose {
             job.cancel()
-            pageBitmap?.let { old -> if (!old.isRecycled) runCatching { old.recycle() } }
             pageBitmap = null
         }
     }
@@ -2325,14 +2276,8 @@ private fun PanelViewer(
                     val newCropped = runCatching {
                         Bitmap.createBitmap(b, cropLeft, cropTop, cropWidth, cropHeight)
                     }.getOrNull()
-                    cropped?.let { old -> if (!old.isRecycled && old !== b) runCatching { old.recycle() } }
+                    // 旧裁剪位图仅解除引用，不手动 recycle：会与 RenderThread 回放显示列表竞态导致崩溃。
                     cropped = newCropped
-                }
-                DisposableEffect(panelState.pageIndex, panelState.currentPanelIndex) {
-                    onDispose {
-                        cropped?.let { old -> if (!old.isRecycled && old !== pageBitmap) runCatching { old.recycle() } }
-                        cropped = null
-                    }
                 }
 
                 val safeCropped = cropped
