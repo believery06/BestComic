@@ -3512,4 +3512,22 @@ MOBI HTML 中 `<img recindex="NNN">` 的 NNN 是**全局 PDB record 索引**（�
 - 验证：`.\gradlew.bat assembleRelease testDebugUnitTest lintDebug` 全部通过。
 - 遗留：用户反馈的「左滑返回书架后闪退」尚未定位，需崩溃日志进一步排查。
 
-*文档更新时间：2026-10-16*
+### 13.89 阅读器返回键行为修复 (2026-10-17)
+
+#### 问题一：系统返回键绕过「退出确认」设置
+1. **现象**：设置里「退出确认」处于开启状态时，用手势 BACK 退出会弹「确定要退出当前漫画吗」，但按系统返回键却直接退出阅读器，两个入口行为不一致。
+2. **根因**：`ReaderScreen` 内**没有任何 `BackHandler`**，系统返回键直接由 Navigation 的 `popBackStack()` 处理并退出阅读器；只有阅读手势层的 `BACK` 动作会走 `onBack` 分支（`exitConfirmDisabled` 为 false 时置 `showExitConfirm = true`）。
+3. **修复**：在 `ReaderScreen` 中新增 `BackHandler(enabled = !exitConfirmDisabled) { showExitConfirm = true }`，使系统返回键与手势 BACK 共用同一套「退出确认」逻辑；用户勾选过「不再询问，直接退出」后该 handler 不再拦截，交由导航栈默认返回。退出确认/卷末对话框本身是 `AlertDialog`，会自行消费返回键，不受影响。
+
+#### 问题二：操作栏弹出时按返回键会直接退出整个阅读器
+1. **现象**：点屏幕中部弹出操作栏后按返回键，漫画直接被关闭退回上一页，而不是先收起操作栏。
+2. **根因**：菜单（`MenuOverlay`）是普通覆盖层而非 `Dialog`，且未注册 `BackHandler`，返回键会穿透到导航栈把阅读器 `pop` 掉。
+3. **修复**：在 `MenuOverlay` 中注册 `BackHandler { onClose() }`，返回键优先收起菜单。页码跳转、书签、缩略图预览、章节列表四个子面板本身均为 `AlertDialog`，会自行消费返回键，不会走到该 handler。
+
+#### 相关文件
+- 修改：`reader/ReaderScreen.kt`（新增退出确认 BackHandler）、`reader/ReaderScreenComponents.kt`（MenuOverlay 新增 BackHandler）、`app/build.gradle.kts`、`CODE_WIKI.md`
+- 版本：`versionCode` 88，`versionName` 1.0.88。
+- 验证：`.\gradlew.bat assembleRelease testDebugUnitTest lintDebug` 全部通过。
+- 遗留：「左滑返回书架后闪退」仍缺崩溃堆栈；应用启动时会自动读取上次异常退出日志并弹 `CrashLogDialog`，可据此继续定位。
+
+*文档更新时间：2026-10-17*

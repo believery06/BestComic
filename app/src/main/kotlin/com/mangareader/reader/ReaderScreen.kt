@@ -155,6 +155,11 @@ fun ReaderScreen(
     var showExitConfirm by rememberSaveable { mutableStateOf(false) }
     var showChapterEndDialog by rememberSaveable { mutableStateOf(false) }
 
+    // 系统返回键与阅读手势的 BACK 动作保持一致：用户未关闭「退出确认」时先弹确认框。
+    // 此前系统返回键完全未拦截（ReaderScreen 内没有任何 BackHandler），会绕过该设置
+    // 直接 pop 回上一页，表现为「设置了退出确认却仍被返回键直接踢出阅读器」。
+    BackHandler(enabled = !exitConfirmDisabled) { showExitConfirm = true }
+
     // 手动翻页到达卷末时，ViewModel 发送事件，弹出"跳转下一卷/已是最后一卷"对话框。
     // 自动翻页与 TTS 连续朗读不经过此事件，避免打断 hands-free 阅读。
     LaunchedEffect(Unit) {

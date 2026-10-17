@@ -1365,6 +1365,12 @@ internal fun MenuOverlay(
     var isSharing by remember { mutableStateOf(false) }
     val isSpeaking by viewModel.isSpeaking.collectAsStateWithLifecycle()
 
+    // 菜单弹出时拦截系统返回键：先关闭菜单，而不是直接退出整个阅读器。
+    // 菜单是普通覆盖层（非 Dialog），此前返回键会穿透到导航栈把阅读器 pop 掉，
+    // 用户表现为「点开操作栏后按返回键，漫画直接关了」。
+    // 页码跳转/书签/缩略图/章节列表均为 AlertDialog，会自行消费返回键，不会走到这里。
+    BackHandler { onClose() }
+
     // 菜单无操作 5 秒后自动隐藏；用户在菜单区域内任意触控时刷新计时
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(lastInteractionTime) {
